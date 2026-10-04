@@ -1,0 +1,12 @@
+{
+  "name": "exammaster-pro-api",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-04",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "exammaster-pro-db",
+      "database_id": "3e7490ae-3860-49c3-ae1c-cc265eb0c968"
+    }
+  ]
+}
