@@ -11,7 +11,8 @@ const ID_TABLES = new Set([
 ]);
 
 const PUBLIC_TABLES = new Set([
-  'subjects','notes','bundles','bundle_tests','banners','content_notifications','app_releases'
+  'subjects','notes','bundles','bundle_tests','banners',
+  'content_notifications','app_releases'
 ]);
 
 const ADMIN_READ_TABLES = new Set([
@@ -46,19 +47,13 @@ function text(
 ) {
   return new Response(body, {
     status,
-    headers: corsHeaders({
-      'Content-Type': contentType
-    })
+    headers: corsHeaders({ 'Content-Type': contentType })
   });
 }
 
 function bad(message, status = 400, details = null) {
   return json(
-    {
-      code: status,
-      message,
-      ...(details ? { details } : {})
-    },
+    { code: status, message, ...(details ? { details } : {}) },
     status
   );
 }
@@ -70,14 +65,6 @@ function nowIso() {
 function cleanIdent(v) {
   const s = String(v || '');
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) ? s : null;
-}
-
-function decodeFilterValue(raw) {
-  let v = String(raw ?? '');
-  if (v.startsWith('eq.')) {
-    return decodeURIComponent(v.slice(3));
-  }
-  return decodeURIComponent(v);
 }
 
 function parseFilters(url) {
@@ -98,9 +85,7 @@ function parseFilters(url) {
       continue;
     }
 
-    if (key === 'or' || key === 'and') {
-      continue;
-    }
+    if (key === 'or' || key === 'and') continue;
 
     const m = String(value).match(
       /^(eq|neq|gt|gte|lt|lte|in|is|like|ilike)\.(.*)$/s
@@ -120,21 +105,16 @@ function parseFilters(url) {
         .filter(Boolean)
         .map(x => x.replace(/^"|"$/g, ''));
     } else if (op === 'is') {
-      val =
-        val.toLowerCase() === 'null'
-          ? null
-          : val.toLowerCase() === 'true';
+      val = val.toLowerCase() === 'null'
+        ? null
+        : val.toLowerCase() === 'true';
     } else {
       try {
         val = decodeURIComponent(val);
       } catch (_) {}
     }
 
-    filters.push({
-      key,
-      op,
-      val
-    });
+    filters.push({ key, op, val });
   }
 
   return filters;
@@ -167,10 +147,7 @@ function compareValue(a, b) {
   return String(a).localeCompare(
     String(b),
     undefined,
-    {
-      numeric: true,
-      sensitivity: 'base'
-    }
+    { numeric: true, sensitivity: 'base' }
   );
 }
 
@@ -201,9 +178,7 @@ function rowMatches(row, filters) {
       case 'in':
         return (
           Array.isArray(val) &&
-          val.some(
-            x => String(actual ?? '') === String(x)
-          )
+          val.some(x => String(actual ?? '') === String(x))
         );
 
       case 'is':
@@ -220,9 +195,7 @@ function rowMatches(row, filters) {
         return String(actual ?? '')
           .toLowerCase()
           .includes(
-            String(val)
-              .replace(/%/g, '')
-              .toLowerCase()
+            String(val).replace(/%/g, '').toLowerCase()
           );
 
       default:
@@ -332,60 +305,29 @@ function sourceRowToD1(table, source) {
         src.bundle_id != null
           ? String(src.bundle_id)
           : '',
-
       bundle_subject_id:
         src.bundle_subject_id != null
           ? String(src.bundle_subject_id)
           : null,
-
       bundle_subject_name:
         src.bundle_subject_name ?? null,
-
-      name:
-        src.name ?? 'Untitled Test',
-
-      description:
-        src.description ?? null,
-
-      level:
-        src.level ?? null,
-
-      difficulty:
-        src.difficulty ?? null,
-
-      time_limit:
-        src.time_limit ?? null,
-
-      html_content:
-        src.html_content ?? null,
-
+      name: src.name ?? 'Untitled Test',
+      description: src.description ?? null,
+      level: src.level ?? null,
+      difficulty: src.difficulty ?? null,
+      time_limit: src.time_limit ?? null,
+      html_content: src.html_content ?? null,
       is_paid:
         src.is_paid == null
           ? null
-          : src.is_paid
-            ? 1
-            : 0,
-
-      access_type:
-        src.access_type ?? null,
-
-      access_mode:
-        src.access_mode ?? null,
-
-      access_override:
-        src.access_override ?? null,
-
-      price:
-        src.price ?? null,
-
-      total_questions:
-        src.total_questions ?? null,
-
-      updated_at:
-        src.updated_at ?? nowIso(),
-
-      deleted_at:
-        src.deleted_at ?? null
+          : (src.is_paid ? 1 : 0),
+      access_type: src.access_type ?? null,
+      access_mode: src.access_mode ?? null,
+      access_override: src.access_override ?? null,
+      price: src.price ?? null,
+      total_questions: src.total_questions ?? null,
+      updated_at: src.updated_at ?? nowIso(),
+      deleted_at: src.deleted_at ?? null
     });
   }
 
@@ -398,122 +340,72 @@ function sourceRowToD1(table, source) {
       qrData: src.qrData ?? null,
       link_type: src.link_type ?? null,
       link: src.link ?? null,
-
       bundle_id:
         src.bundle_id == null ||
         src.bundle_id === ''
           ? null
           : String(src.bundle_id),
-
-      subject_id:
-        src.subject_id ?? null,
-
-      test_id:
-        src.test_id ?? null,
-
-      slide_seconds:
-        src.slide_seconds ?? null,
-
-      updated_at:
-        src.updated_at ?? nowIso()
+      subject_id: src.subject_id ?? null,
+      test_id: src.test_id ?? null,
+      slide_seconds: src.slide_seconds ?? null,
+      updated_at: src.updated_at ?? nowIso()
     });
   }
 
   else if (table === 'activation_codes') {
     Object.assign(common, {
-      code:
-        src.code ??
-        src.code_hash ??
-        null,
-
+      code: src.code ?? src.code_hash ?? null,
       bundle_id:
         src.bundle_id != null
           ? String(src.bundle_id)
           : null,
-
-      amount:
-        src.amount ?? 0,
-
-      status:
-        src.status ?? 'unused',
-
-      redeemed_by:
-        src.redeemed_by ?? null,
-
-      redeemed_at:
-        src.redeemed_at ?? null,
-
-      created_at:
-        src.created_at ?? nowIso()
+      amount: src.amount ?? 0,
+      status: src.status ?? 'unused',
+      redeemed_by: src.redeemed_by ?? null,
+      redeemed_at: src.redeemed_at ?? null,
+      created_at: src.created_at ?? nowIso()
     });
   }
 
   else if (table === 'entitlements') {
     Object.assign(common, {
-      user_key:
-        src.user_key ?? '',
-
+      user_key: src.user_key ?? '',
       bundle_id:
         src.bundle_id != null
           ? String(src.bundle_id)
           : '',
-
-      created_at:
-        src.created_at ?? nowIso()
+      created_at: src.created_at ?? nowIso()
     });
   }
 
   else if (table === 'emp_test_submissions') {
     Object.assign(common, {
-      attempt_id:
-        src.attempt_id ?? id,
-
+      attempt_id: src.attempt_id ?? id,
       user_id:
         src.user_id != null
           ? String(src.user_id)
           : null,
-
-      username:
-        src.username ?? null,
-
+      username: src.username ?? null,
       test_id:
         src.test_id != null
           ? String(src.test_id)
           : null,
-
       bundle_id:
         src.bundle_id != null
           ? String(src.bundle_id)
           : null,
-
       subject_id:
         src.subject_id != null
           ? String(src.subject_id)
           : null,
-
-      test_name:
-        src.test_name ?? null,
-
-      score:
-        src.score ?? null,
-
-      total_marks:
-        src.total_marks ?? null,
-
-      accuracy:
-        src.accuracy ?? null,
-
-      percentile:
-        src.percentile ?? null,
-
-      status:
-        src.status ?? null,
-
-      completed_at:
-        src.completed_at ?? null,
-
-      created_at:
-        src.created_at ?? nowIso()
+      test_name: src.test_name ?? null,
+      score: src.score ?? null,
+      total_marks: src.total_marks ?? null,
+      accuracy: src.accuracy ?? null,
+      percentile: src.percentile ?? null,
+      status: src.status ?? null,
+      completed_at: src.completed_at ?? null,
+      created_at: src.created_at ?? nowIso()
     });
   }
 
@@ -523,49 +415,30 @@ function sourceRowToD1(table, source) {
         src.user_id != null
           ? String(src.user_id)
           : null,
-
-      username:
-        src.username ?? null,
-
-      event_type:
-        src.event_type ?? null,
-
-      occurred_at:
-        src.occurred_at ?? nowIso()
+      username: src.username ?? null,
+      event_type: src.event_type ?? null,
+      occurred_at: src.occurred_at ?? nowIso()
     });
   }
 
   else if (table === 'content_notifications') {
     Object.assign(common, {
-      title:
-        src.title ?? null,
-
-      description:
-        src.description ?? null,
-
-      content_type:
-        src.content_type ?? null,
-
+      title: src.title ?? null,
+      description: src.description ?? null,
+      content_type: src.content_type ?? null,
       content_id:
         src.content_id == null
           ? null
           : String(src.content_id),
-
-      created_at:
-        src.created_at ?? nowIso()
+      created_at: src.created_at ?? nowIso()
     });
   }
 
   else if (table === 'admin_users') {
     Object.assign(common, {
-      user_id:
-        String(src.user_id ?? id),
-
-      email:
-        src.email ?? null,
-
-      created_at:
-        src.created_at ?? nowIso()
+      user_id: String(src.user_id ?? id),
+      email: src.email ?? null,
+      created_at: src.created_at ?? nowIso()
     });
   }
 
@@ -573,40 +446,21 @@ function sourceRowToD1(table, source) {
     Object.assign(common, {
       release_id:
         String(src.release_id ?? id),
-
-      release_path:
-        src.release_path ?? null,
-
-      release_url:
-        src.release_url ?? null,
-
-      published_at:
-        src.published_at ?? nowIso(),
-
-      size_bytes:
-        src.size_bytes ?? null,
-
-      content_hash:
-        src.content_hash ?? null,
-
-      active:
-        src.active ? 1 : 0
+      release_path: src.release_path ?? null,
+      release_url: src.release_url ?? null,
+      published_at: src.published_at ?? nowIso(),
+      size_bytes: src.size_bytes ?? null,
+      content_hash: src.content_hash ?? null,
+      active: src.active ? 1 : 0
     });
   }
 
   else if (table === 'cf_users') {
     Object.assign(common, {
-      email:
-        src.email ?? null,
-
-      password_hash:
-        src.password_hash ?? null,
-
-      role:
-        src.role ?? 'user',
-
-      created_at:
-        src.created_at ?? nowIso()
+      email: src.email ?? null,
+      password_hash: src.password_hash ?? null,
+      role: src.role ?? 'user',
+      created_at: src.created_at ?? nowIso()
     });
   }
 
@@ -620,9 +474,7 @@ function d1RowToSource(row) {
     data = JSON.parse(row.data_json || '{}');
   } catch (_) {}
 
-  const base = {
-    ...row
-  };
+  const base = { ...row };
 
   delete base.data_json;
 
@@ -846,48 +698,35 @@ async function readTable(env, table, url) {
 
   const rows = await env.DB
     .prepare(
-      `SELECT ${cols
-        .map(c => '"' + c + '"')
-        .join(',')} FROM "${table}"`
+      `SELECT ${cols.map(c => '"' + c + '"').join(',')} FROM "${table}"`
     )
     .all();
 
-  let out =
-    (rows.results || []).map(d1RowToSource);
+  let out = (rows.results || []).map(d1RowToSource);
 
   const filters = parseFilters(url);
 
-  out = out.filter(r =>
-    rowMatches(r, filters)
-  );
+  out = out.filter(r => rowMatches(r, filters));
 
   const orders = parseOrder(
     url.searchParams.get('order')
   );
 
-  for (
-    let i = orders.length - 1;
-    i >= 0;
-    i--
-  ) {
+  for (let i = orders.length - 1; i >= 0; i--) {
     const o = orders[i];
 
     out.sort(
       (a, b) =>
         o.dir *
-        compareValue(
-          a[o.field],
-          b[o.field]
-        )
+        compareValue(a[o.field], b[o.field])
     );
   }
 
-  const offset = Math.max(
-    0,
-    Number(
-      url.searchParams.get('offset') || 0
-    ) || 0
-  );
+  const offset =
+    Math.max(
+      0,
+      Number(url.searchParams.get('offset') || 0) || 0
+    );
 
   const limitRaw =
     url.searchParams.get('limit');
@@ -895,11 +734,7 @@ async function readTable(env, table, url) {
   if (limitRaw != null) {
     out = out.slice(
       offset,
-      offset +
-        Math.max(
-          0,
-          Number(limitRaw) || 0
-        )
+      offset + Math.max(0, Number(limitRaw) || 0)
     );
   } else if (offset) {
     out = out.slice(offset);
@@ -909,9 +744,7 @@ async function readTable(env, table, url) {
     url.searchParams.get('select')
   );
 
-  return out.map(r =>
-    applySelect(r, fields)
-  );
+  return out.map(r => applySelect(r, fields));
 }
 
 async function upsertSourceRow(
@@ -920,59 +753,44 @@ async function upsertSourceRow(
   src,
   conflict
 ) {
-  const d = sourceRowToD1(
-    table,
-    src
-  );
+  const d = sourceRowToD1(table, src);
 
-  const cols = tableColumns(
-    table
-  ).filter(
-    c => c !== 'data_json'
-  );
+  const cols = tableColumns(table)
+    .filter(c => c !== 'data_json');
 
-  const key = uniqueKey(
-    table,
-    src,
-    conflict
-  );
+  const key = uniqueKey(table, src, conflict);
 
-  const existing =
-    await env.DB
-      .prepare(
-        `SELECT 1 FROM "${table}" WHERE "${key.field}" = ? LIMIT 1`
-      )
-      .bind(key.value)
-      .first();
+  const existing = await env.DB
+    .prepare(
+      `SELECT 1 FROM "${table}" WHERE "${key.field}" = ? LIMIT 1`
+    )
+    .bind(key.value)
+    .first();
 
   const values = cols.map(
     c => d[c] ?? null
   );
 
   if (existing) {
-    const set = cols
-      .filter(c => c !== key.field)
+    const updateCols =
+      cols.filter(c => c !== key.field);
+
+    const set = updateCols
       .map(c => `"${c}"=?`)
       .join(',');
 
-    const vals = cols
-      .filter(c => c !== key.field)
-      .map(c => d[c] ?? null);
+    const vals = updateCols.map(
+      c => d[c] ?? null
+    );
 
     await env.DB
       .prepare(
         `UPDATE "${table}" SET ${set} WHERE "${key.field}"=?`
       )
-      .bind(
-        ...vals,
-        key.value
-      )
+      .bind(...vals, key.value)
       .run();
   } else {
-    const all = [
-      ...cols,
-      'data_json'
-    ];
+    const all = [...cols, 'data_json'];
 
     const placeholders =
       all.map(() => '?').join(',');
@@ -986,7 +804,8 @@ async function upsertSourceRow(
       .prepare(
         `INSERT INTO "${table}" (${all
           .map(c => '"' + c + '"')
-          .join(',')}) VALUES (${placeholders})`
+          .join(',')})
+         VALUES (${placeholders})`
       )
       .bind(...vals)
       .run();
@@ -995,17 +814,9 @@ async function upsertSourceRow(
   return d;
 }
 
-async function deleteByFilters(
-  env,
-  table,
-  url
-) {
+async function deleteByFilters(env, table, url) {
   const rows =
-    await readTable(
-      env,
-      table,
-      url
-    );
+    await readTable(env, table, url);
 
   if (!rows.length) return 0;
 
@@ -1016,24 +827,21 @@ async function deleteByFilters(
       table === 'admin_users'
         ? 'user_id'
         : table === 'app_releases'
-          ? 'release_id'
-          : 'id';
+        ? 'release_id'
+        : 'id';
 
     const val = row[key];
 
     if (val == null) continue;
 
-    const r =
-      await env.DB
-        .prepare(
-          `DELETE FROM "${table}" WHERE "${key}"=?`
-        )
-        .bind(String(val))
-        .run();
+    const r = await env.DB
+      .prepare(
+        `DELETE FROM "${table}" WHERE "${key}"=?`
+      )
+      .bind(String(val))
+      .run();
 
-    n += Number(
-      r.meta?.changes || 0
-    );
+    n += Number(r.meta?.changes || 0);
   }
 
   return n;
@@ -1052,8 +860,7 @@ async function handleRest(
     );
   }
 
-  const method =
-    request.method;
+  const method = request.method;
 
   const isWrite = [
     'POST',
@@ -1071,19 +878,12 @@ async function handleRest(
       'entitlements'
     ].includes(table)
   ) {
-    return bad(
-      'Unauthorized',
-      401
-    );
+    return bad('Unauthorized', 401);
   }
 
   if (method === 'GET') {
     return json(
-      await readTable(
-        env,
-        table,
-        url
-      )
+      await readTable(env, table, url)
     );
   }
 
@@ -1094,12 +894,9 @@ async function handleRest(
     let body;
 
     try {
-      body =
-        await request.json();
+      body = await request.json();
     } catch (e) {
-      return bad(
-        'Invalid JSON body'
-      );
+      return bad('Invalid JSON body');
     }
 
     const rows =
@@ -1108,15 +905,12 @@ async function handleRest(
         : [body];
 
     const conflict =
-      url.searchParams.get(
-        'on_conflict'
-      ) || null;
+      url.searchParams.get('on_conflict') ||
+      null;
 
     const out = [];
 
-    for (
-      const src of rows
-    ) {
+    for (const src of rows) {
       out.push(
         await upsertSourceRow(
           env,
@@ -1129,24 +923,17 @@ async function handleRest(
 
     const prefer =
       (
-        request.headers.get(
-          'Prefer'
-        ) || ''
+        request.headers.get('Prefer') ||
+        ''
       ).toLowerCase();
 
     if (
-      prefer.includes(
-        'return=minimal'
-      )
+      prefer.includes('return=minimal')
     ) {
-      return new Response(
-        null,
-        {
-          status: 201,
-          headers:
-            corsHeaders()
-        }
-      );
+      return new Response(null, {
+        status: 201,
+        headers: corsHeaders()
+      });
     }
 
     return json(
@@ -1159,20 +946,13 @@ async function handleRest(
     let body;
 
     try {
-      body =
-        await request.json();
+      body = await request.json();
     } catch (_) {
-      return bad(
-        'Invalid JSON body'
-      );
+      return bad('Invalid JSON body');
     }
 
     const rows =
-      await readTable(
-        env,
-        table,
-        url
-      );
+      await readTable(env, table, url);
 
     if (!rows.length) {
       return json([]);
@@ -1180,15 +960,9 @@ async function handleRest(
 
     const out = [];
 
-    for (
-      const row of rows
-    ) {
+    for (const row of rows) {
       const merged =
-        Object.assign(
-          {},
-          row,
-          body
-        );
+        Object.assign({}, row, body);
 
       out.push(
         await upsertSourceRow(
@@ -1202,40 +976,25 @@ async function handleRest(
 
     const prefer =
       (
-        request.headers.get(
-          'Prefer'
-        ) || ''
+        request.headers.get('Prefer') ||
+        ''
       ).toLowerCase();
 
     if (
-      prefer.includes(
-        'return=minimal'
-      )
+      prefer.includes('return=minimal')
     ) {
-      return new Response(
-        null,
-        {
-          status: 204,
-          headers:
-            corsHeaders()
-        }
-      );
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders()
+      });
     }
 
     return json(out);
   }
 
   if (method === 'DELETE') {
-    if (
-      !adminAllowed(
-        request,
-        env
-      )
-    ) {
-      return bad(
-        'Unauthorized',
-        401
-      );
+    if (!adminAllowed(request, env)) {
+      return bad('Unauthorized', 401);
     }
 
     const count =
@@ -1245,16 +1004,12 @@ async function handleRest(
         url
       );
 
-    return new Response(
-      null,
-      {
-        status: 204,
-        headers: corsHeaders({
-          'X-Deleted-Rows':
-            String(count)
-        })
-      }
-    );
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders({
+        'X-Deleted-Rows': String(count)
+      })
+    });
   }
 
   return bad(
@@ -1263,9 +1018,7 @@ async function handleRest(
   );
 }
 
-async function sha256Hex(
-  value
-) {
+async function sha256Hex(value) {
   const bytes =
     new TextEncoder().encode(
       String(value)
@@ -1281,8 +1034,7 @@ async function sha256Hex(
     ...new Uint8Array(digest)
   ]
     .map(b =>
-      b.toString(16)
-        .padStart(2, '0')
+      b.toString(16).padStart(2, '0')
     )
     .join('');
 }
@@ -1294,18 +1046,13 @@ async function handleRedeemActivation(
   let body = {};
 
   try {
-    body =
-      await request.json();
+    body = await request.json();
   } catch (_) {
-    return bad(
-      'Invalid JSON body'
-    );
+    return bad('Invalid JSON body');
   }
 
   const code =
-    String(
-      body.p_code || ''
-    ).trim();
+    String(body.p_code || '').trim();
 
   const bundleId =
     String(
@@ -1317,11 +1064,7 @@ async function handleRedeemActivation(
       body.p_user_key || ''
     ).trim();
 
-  if (
-    !code ||
-    !bundleId ||
-    !userKey
-  ) {
+  if (!code || !bundleId || !userKey) {
     return json(
       {
         status: 'error',
@@ -1338,12 +1081,11 @@ async function handleRedeemActivation(
   const row =
     await env.DB
       .prepare(
-        'SELECT * FROM activation_codes WHERE code=? AND bundle_id=? LIMIT 1'
+        `SELECT * FROM activation_codes
+         WHERE code=? AND bundle_id=?
+         LIMIT 1`
       )
-      .bind(
-        hash,
-        bundleId
-      )
+      .bind(hash, bundleId)
       .first();
 
   if (!row) {
@@ -1355,10 +1097,8 @@ async function handleRedeemActivation(
   }
 
   if (
-    String(
-      row.status || ''
-    ).toLowerCase() !==
-    'unused'
+    String(row.status || '')
+      .toLowerCase() !== 'unused'
   ) {
     return json({
       status: 'used',
@@ -1367,13 +1107,15 @@ async function handleRedeemActivation(
     });
   }
 
-  const now =
-    nowIso();
+  const now = nowIso();
 
-  const data =
-    JSON.parse(
+  let data = {};
+
+  try {
+    data = JSON.parse(
       row.data_json || '{}'
     );
+  } catch (_) {}
 
   const entId =
     crypto.randomUUID();
@@ -1381,7 +1123,12 @@ async function handleRedeemActivation(
   await env.DB.batch([
     env.DB
       .prepare(
-        'UPDATE activation_codes SET status=?,redeemed_by=?,redeemed_at=?,data_json=? WHERE id=?'
+        `UPDATE activation_codes
+         SET status=?,
+             redeemed_by=?,
+             redeemed_at=?,
+             data_json=?
+         WHERE id=?`
       )
       .bind(
         'redeemed',
@@ -1398,7 +1145,9 @@ async function handleRedeemActivation(
 
     env.DB
       .prepare(
-        'INSERT OR IGNORE INTO entitlements (id,user_key,bundle_id,created_at,data_json) VALUES (?,?,?,?,?)'
+        `INSERT OR IGNORE INTO entitlements
+         (id,user_key,bundle_id,created_at,data_json)
+         VALUES (?,?,?,?,?)`
       )
       .bind(
         entId,
@@ -1409,8 +1158,7 @@ async function handleRedeemActivation(
           user_key: userKey,
           bundle_id: bundleId,
           created_at: now,
-          activation_id:
-            row.id
+          activation_id: row.id
         })
       )
   ]);
@@ -1427,23 +1175,17 @@ async function fetchSupabaseJson(
   url,
   key
 ) {
-  const r =
-    await fetch(
-      url,
-      {
-        headers: {
-          apikey: key,
-          Authorization:
-            'Bearer ' + key,
-          Accept:
-            'application/json'
-        },
-        cf: {
-          cacheTtl: 0,
-          cacheEverything: false
-        }
-      }
-    );
+  const r = await fetch(url, {
+    headers: {
+      apikey: key,
+      Authorization: 'Bearer ' + key,
+      Accept: 'application/json'
+    },
+    cf: {
+      cacheTtl: 0,
+      cacheEverything: false
+    }
+  });
 
   const txt =
     await r.text();
@@ -1460,8 +1202,7 @@ async function fetchSupabaseJson(
   let data;
 
   try {
-    data =
-      JSON.parse(txt);
+    data = JSON.parse(txt);
   } catch (_) {
     throw new Error(
       'Invalid JSON from Supabase'
@@ -1479,8 +1220,7 @@ async function migrateStoreFromSupabase(
 ) {
   if (!TABLES.has(table)) {
     throw new Error(
-      'Unsupported table ' +
-      table
+      'Unsupported table ' + table
     );
   }
 
@@ -1510,11 +1250,8 @@ async function migrateStoreFromSupabase(
         key
       );
 
-    for (
-      const x of ids
-    ) {
-      if (x?.id == null)
-        continue;
+    for (const x of ids) {
+      if (x?.id == null) continue;
 
       const part =
         await fetchSupabaseJson(
@@ -1547,22 +1284,13 @@ async function migrateStoreFromSupabase(
           key
         );
 
-      rows.push(
-        ...part
-      );
+      rows.push(...part);
 
-      if (
-        part.length < page
-      ) {
-        break;
-      }
+      if (part.length < page) break;
 
-      offset +=
-        part.length;
+      offset += part.length;
 
-      if (offset > 50000) {
-        break;
-      }
+      if (offset > 50000) break;
     }
   }
 
@@ -1574,14 +1302,9 @@ async function migrateStoreFromSupabase(
     i += 25
   ) {
     const chunk =
-      rows.slice(
-        i,
-        i + 25
-      );
+      rows.slice(i, i + 25);
 
-    for (
-      const src of chunk
-    ) {
+    for (const src of chunk) {
       await upsertSourceRow(
         env,
         table,
@@ -1595,8 +1318,7 @@ async function migrateStoreFromSupabase(
 
   return {
     table,
-    source_rows:
-      rows.length,
+    source_rows: rows.length,
     written
   };
 }
@@ -1606,23 +1328,13 @@ async function handleMigration(
   env,
   url
 ) {
-  if (
-    !adminAllowed(
-      request,
-      env
-    )
-  ) {
-    return bad(
-      'Unauthorized',
-      401
-    );
+  if (!adminAllowed(request, env)) {
+    return bad('Unauthorized', 401);
   }
 
   const tables =
     (
-      url.searchParams.get(
-        'tables'
-      ) ||
+      url.searchParams.get('tables') ||
       'subjects,notes,bundles,bundle_tests,banners,content_notifications'
     )
       .split(',')
@@ -1631,9 +1343,7 @@ async function handleMigration(
 
   const out = [];
 
-  for (
-    const table of tables
-  ) {
+  for (const table of tables) {
     out.push(
       await migrateStoreFromSupabase(
         env,
@@ -1654,8 +1364,7 @@ async function handleRpc(
   fn
 ) {
   if (
-    fn !==
-    'get_bundle_entitlements'
+    fn !== 'get_bundle_entitlements'
   ) {
     return bad(
       'RPC not found',
@@ -1666,12 +1375,9 @@ async function handleRpc(
   let body = {};
 
   try {
-    body =
-      await request.json();
+    body = await request.json();
   } catch (_) {
-    return bad(
-      'Invalid JSON body'
-    );
+    return bad('Invalid JSON body');
   }
 
   const key =
@@ -1686,33 +1392,34 @@ async function handleRpc(
   const rows =
     await env.DB
       .prepare(
-        'SELECT bundle_id, created_at, data_json FROM entitlements WHERE user_key=? ORDER BY created_at DESC'
+        `SELECT bundle_id,
+                created_at,
+                data_json
+         FROM entitlements
+         WHERE user_key=?
+         ORDER BY created_at DESC`
       )
       .bind(key)
       .all();
 
   return json(
-    (rows.results || []).map(
-      r => {
-        let x = {};
+    (rows.results || []).map(r => {
+      let x = {};
 
-        try {
-          x = JSON.parse(
-            r.data_json || '{}'
-          );
-        } catch (_) {}
-
-        return Object.assign(
-          {
-            bundle_id:
-              r.bundle_id,
-            created_at:
-              r.created_at
-          },
-          x
+      try {
+        x = JSON.parse(
+          r.data_json || '{}'
         );
-      }
-    )
+      } catch (_) {}
+
+      return Object.assign(
+        {
+          bundle_id: r.bundle_id,
+          created_at: r.created_at
+        },
+        x
+      );
+    })
   );
 }
 
@@ -1722,9 +1429,7 @@ async function handleReleaseStorage(
   path
 ) {
   const parts =
-    path
-      .split('/')
-      .filter(Boolean);
+    path.split('/').filter(Boolean);
 
   const isPublic =
     parts[2] === 'public';
@@ -1757,7 +1462,11 @@ async function handleReleaseStorage(
     const row =
       await env.DB
         .prepare(
-          'SELECT data_json FROM app_releases WHERE release_path=? OR id=? LIMIT 1'
+          `SELECT data_json
+           FROM app_releases
+           WHERE release_path=?
+              OR release_id=?
+           LIMIT 1`
         )
         .bind(
           objectPath,
@@ -1806,12 +1515,7 @@ async function handleReleaseStorage(
       request.method
     )
   ) {
-    if (
-      !adminAllowed(
-        request,
-        env
-      )
-    ) {
+    if (!adminAllowed(request, env)) {
       return bad(
         'Unauthorized',
         401
@@ -1832,12 +1536,8 @@ async function handleReleaseStorage(
       crypto.randomUUID();
 
     const row = {
-      release_id:
-        releaseId,
-
-      release_path:
-        objectPath,
-
+      release_id: releaseId,
+      release_path: objectPath,
       release_url:
         new URL(
           '/storage/v1/object/public/' +
@@ -1846,17 +1546,10 @@ async function handleReleaseStorage(
             objectPath,
           request.url
         ).toString(),
-
-      published_at:
-        nowIso(),
-
-      size_bytes:
-        html.length,
-
+      published_at: nowIso(),
+      size_bytes: html.length,
       active: 0,
-
-      html_content:
-        html
+      html_content: html
     };
 
     const d =
@@ -1865,24 +1558,23 @@ async function handleReleaseStorage(
         row
       );
 
-    const old =
+    let old =
       await env.DB
         .prepare(
-          'SELECT data_json FROM app_releases WHERE release_id=?'
+          `SELECT data_json
+           FROM app_releases
+           WHERE release_id=?`
         )
-        .bind(
-          releaseId
-        )
+        .bind(releaseId)
         .first();
 
     if (old) {
       let prior = {};
 
       try {
-        prior =
-          JSON.parse(
-            old.data_json || '{}'
-          );
+        prior = JSON.parse(
+          old.data_json || '{}'
+        );
       } catch (_) {}
 
       d.data_json =
@@ -1920,7 +1612,13 @@ async function handleReleaseStorage(
     if (existing) {
       await env.DB
         .prepare(
-          'UPDATE app_releases SET release_path=?,release_url=?,published_at=?,size_bytes=?,data_json=? WHERE release_id=?'
+          `UPDATE app_releases
+           SET release_path=?,
+               release_url=?,
+               published_at=?,
+               size_bytes=?,
+               data_json=?
+           WHERE release_id=?`
         )
         .bind(
           d.release_path,
@@ -1934,24 +1632,20 @@ async function handleReleaseStorage(
     } else {
       await env.DB
         .prepare(
-          `INSERT INTO app_releases (${all
-            .map(
-              c => '"' + c + '"'
-            )
-            .join(',')}) VALUES (?,?,?,?,?,?,?,?)`
+          `INSERT INTO app_releases
+           (${all
+             .map(c => '"' + c + '"')
+             .join(',')})
+           VALUES (?,?,?,?,?,?,?,?)`
         )
         .bind(...vals)
         .run();
     }
 
-    return json(
-      {
-        Key: objectPath,
-        release_id:
-          releaseId
-      },
-      200
-    );
+    return json({
+      Key: objectPath,
+      release_id: releaseId
+    });
   }
 
   return bad(
@@ -1960,32 +1654,30 @@ async function handleReleaseStorage(
   );
 }
 
-async function handleHealth(
-  env
-) {
+async function handleHealth(env) {
   try {
     const result =
       await env.DB
         .prepare(
-          "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+          `SELECT name
+           FROM sqlite_master
+           WHERE type='table'
+           ORDER BY name`
         )
         .all();
 
     return json({
       success: true,
-      database:
-        'connected',
+      database: 'connected',
       tables:
         result.results || [],
-      api:
-        'phase2-rest-compat'
+      api: 'phase2-rest-compat'
     });
   } catch (error) {
     return json(
       {
         success: false,
-        error:
-          error.message
+        error: error.message
       },
       500
     );
@@ -1993,10 +1685,7 @@ async function handleHealth(
 }
 
 export default {
-  async fetch(
-    request,
-    env
-  ) {
+  async fetch(request, env) {
     if (
       request.method ===
       'OPTIONS'
@@ -2025,9 +1714,7 @@ export default {
         path === '/' ||
         path === '/health'
       ) {
-        return handleHealth(
-          env
-        );
+        return handleHealth(env);
       }
 
       if (
@@ -2036,9 +1723,7 @@ export default {
         )
       ) {
         const fn =
-          path
-            .split('/')
-            .pop();
+          path.split('/').pop();
 
         if (
           fn ===
@@ -2098,15 +1783,13 @@ export default {
       }
 
       if (
-        path ===
-        '/api/status'
+        path === '/api/status'
       ) {
         return json({
           ok: true,
           worker:
             'exammaster-pro-api',
-          database:
-            'D1',
+          database: 'D1',
           r2: false
         });
       }
