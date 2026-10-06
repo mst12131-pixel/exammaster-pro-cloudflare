@@ -1,16 +1,22 @@
 /*
  * ExamMaster Pro - Cloudflare Worker / D1
- * V5.159 - BUNDLE LIKES SYNC
+ * V5.160 - RANKING YOU FIXED
  *
- * Includes:
- * 1. Bundle/Test access synchronization
- * 2. Activation codes + lifetime entitlements
- * 3. Test publish/modify/delete sync
- * 4. Analytics + ranking
- * 5. Bundle like system
- * 6. Admin/manual like count support through bundle data
- * 7. Student bundle_like analytics
- * 8. Unique-user bundle like counting
+ * Fixes:
+ * 1. bundle_tests access state is authoritative.
+ * 2. Access-only test updates never erase existing html_content.
+ * 3. Activation entitlement RPCs.
+ * 4. Bundle like-count endpoint.
+ * 5. Analytics events.
+ * 6. Ranking submit.
+ * 7. Ranking leaderboard:
+ *    - One best ranking entry per student
+ *    - Selected attempt is preserved
+ *    - Exact attempt_id identifies YOU
+ *    - user_id fallback identifies YOU
+ *    - Rank calculated correctly
+ *    - Percentile calculated correctly
+ *    - is_you returned for every leaderboard row
  */
 
 const TABLES = new Set([
@@ -62,7 +68,8 @@ function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: corsHeaders({
-      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Type':
+        'application/json; charset=utf-8',
       ...extra
     })
   });
@@ -81,7 +88,11 @@ function text(
   });
 }
 
-function bad(message, status = 400, details = null) {
+function bad(
+  message,
+  status = 400,
+  details = null
+) {
   return json(
     {
       code: status,
@@ -98,12 +109,16 @@ function nowIso() {
 
 function cleanIdent(v) {
   const s = String(v || '');
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) ? s : null;
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s)
+    ? s
+    : null;
 }
 
 function decodeFilterValue(raw) {
   try {
-    return decodeURIComponent(String(raw ?? ''));
+    return decodeURIComponent(
+      String(raw ?? '')
+    );
   } catch (_) {
     return String(raw ?? '');
   }
@@ -127,7 +142,9 @@ function parseFilters(url) {
       continue;
     }
 
-    if (key === 'or' || key === 'and') continue;
+    if (key === 'or' || key === 'and') {
+      continue;
+    }
 
     const m = String(value).match(
       /^(eq|neq|gt|gte|lt|lte|in|is|like|ilike)\.(.*)$/s
@@ -145,11 +162,18 @@ function parseFilters(url) {
         .split(',')
         .map(x => x.trim())
         .filter(Boolean)
-        .map(x => x.replace(/^"|"$/g, ''))
+        .map(x =>
+          x.replace(/^"|"$/g, '')
+        )
         .map(decodeFilterValue);
     } else if (op === 'is') {
-      const low = String(val).toLowerCase();
-      val = low === 'null' ? null : low === 'true';
+      const low =
+        String(val).toLowerCase();
+
+      val =
+        low === 'null'
+          ? null
+          : low === 'true';
     } else {
       val = decodeFilterValue(val);
     }
@@ -184,7 +208,10 @@ function compareValue(a, b) {
   const da = Date.parse(String(a));
   const db = Date.parse(String(b));
 
-  if (Number.isFinite(da) && Number.isFinite(db)) {
+  if (
+    Number.isFinite(da) &&
+    Number.isFinite(db)
+  ) {
     return da - db;
   }
 
@@ -205,22 +232,36 @@ function rowMatches(row, filters) {
 
     switch (f.op) {
       case 'eq':
-        return String(actual ?? '') === String(val ?? '');
+        return (
+          String(actual ?? '') ===
+          String(val ?? '')
+        );
 
       case 'neq':
-        return String(actual ?? '') !== String(val ?? '');
+        return (
+          String(actual ?? '') !==
+          String(val ?? '')
+        );
 
       case 'gt':
-        return compareValue(actual, val) > 0;
+        return (
+          compareValue(actual, val) > 0
+        );
 
       case 'gte':
-        return compareValue(actual, val) >= 0;
+        return (
+          compareValue(actual, val) >= 0
+        );
 
       case 'lt':
-        return compareValue(actual, val) < 0;
+        return (
+          compareValue(actual, val) < 0
+        );
 
       case 'lte':
-        return compareValue(actual, val) <= 0;
+        return (
+          compareValue(actual, val) <= 0
+        );
 
       case 'in':
         return (
@@ -235,12 +276,17 @@ function rowMatches(row, filters) {
       case 'is':
         return val === null
           ? actual == null
-          : Boolean(actual) === Boolean(val);
+          : Boolean(actual) ===
+            Boolean(val);
 
       case 'like':
-        return String(actual ?? '').includes(
-          String(val).replace(/%/g, '')
-        );
+        return String(actual ?? '')
+          .includes(
+            String(val).replace(
+              /%/g,
+              ''
+            )
+          );
 
       case 'ilike':
         return String(actual ?? '')
@@ -258,11 +304,15 @@ function rowMatches(row, filters) {
 }
 
 function parseSelect(raw) {
-  if (!raw || raw === '*') return null;
+  if (!raw || raw === '*') {
+    return null;
+  }
 
   return String(raw)
     .split(',')
-    .map(s => cleanIdent(s.trim()))
+    .map(s =>
+      cleanIdent(s.trim())
+    )
     .filter(Boolean);
 }
 
@@ -284,12 +334,15 @@ function parseOrder(raw) {
   return String(raw)
     .split(',')
     .map(part => {
-      const p = part.trim().split('.');
+      const p =
+        part.trim().split('.');
 
       return {
         field: cleanIdent(p[0]),
         dir:
-          String(p[1] || 'asc').toLowerCase() ===
+          String(
+            p[1] || 'asc'
+          ).toLowerCase() ===
           'desc'
             ? -1
             : 1
@@ -300,7 +353,8 @@ function parseOrder(raw) {
 
 function normalizeAccessState(source) {
   const s =
-    source && typeof source === 'object'
+    source &&
+    typeof source === 'object'
       ? source
       : {};
 
@@ -338,11 +392,13 @@ function normalizeAccessState(source) {
 
 function normalizeTestAccess(source) {
   const s =
-    source && typeof source === 'object'
+    source &&
+    typeof source === 'object'
       ? source
       : {};
 
-  const state = normalizeAccessState(s);
+  const state =
+    normalizeAccessState(s);
 
   return {
     state,
@@ -353,22 +409,30 @@ function normalizeTestAccess(source) {
 
     access_type: state,
 
-    is_paid: state === 'paid',
+    is_paid:
+      state === 'paid',
 
     price:
       state === 'paid'
         ? Math.max(
             0,
-            Number(s.price || 0) || 0
+            Number(s.price || 0) ||
+              0
           )
         : 0
   };
 }
 
-function sourceRowToD1(table, source) {
+function sourceRowToD1(
+  table,
+  source
+) {
   const src =
-    source && typeof source === 'object'
-      ? JSON.parse(JSON.stringify(source))
+    source &&
+    typeof source === 'object'
+      ? JSON.parse(
+          JSON.stringify(source)
+        )
       : {};
 
   const id =
@@ -378,20 +442,31 @@ function sourceRowToD1(table, source) {
 
   const common = {
     id,
-    data_json: JSON.stringify(src)
+    data_json:
+      JSON.stringify(src)
   };
 
   if (table === 'subjects') {
     Object.assign(common, {
-      name: src.name ?? null,
+      name:
+        src.name ?? null,
+
       description:
         src.description ?? null,
-      icon: src.icon ?? null,
-      color: src.color ?? null,
+
+      icon:
+        src.icon ?? null,
+
+      color:
+        src.color ?? null,
+
       created_at:
-        src.created_at ?? nowIso(),
+        src.created_at ??
+        nowIso(),
+
       updated_at:
-        src.updated_at ?? nowIso()
+        src.updated_at ??
+        nowIso()
     });
   }
 
@@ -399,10 +474,13 @@ function sourceRowToD1(table, source) {
     Object.assign(common, {
       subject_id:
         src.subject_id != null
-          ? String(src.subject_id)
+          ? String(
+              src.subject_id
+            )
           : null,
 
-      title: src.title ?? null,
+      title:
+        src.title ?? null,
 
       content:
         src.content ?? null,
@@ -417,27 +495,34 @@ function sourceRowToD1(table, source) {
         src.file_type ?? null,
 
       created_at:
-        src.created_at ?? nowIso(),
+        src.created_at ??
+        nowIso(),
 
       updated_at:
-        src.updated_at ?? nowIso()
+        src.updated_at ??
+        nowIso()
     });
   }
 
   else if (table === 'bundles') {
     Object.assign(common, {
       name:
-        src.name ?? 'Untitled Bundle',
+        src.name ??
+        'Untitled Bundle',
 
       description:
-        src.description ?? null,
+        src.description ??
+        null,
 
       updated_at:
-        src.updated_at ?? nowIso()
+        src.updated_at ??
+        nowIso()
     });
   }
 
-  else if (table === 'bundle_tests') {
+  else if (
+    table === 'bundle_tests'
+  ) {
     const a =
       normalizeTestAccess(src);
 
@@ -467,7 +552,9 @@ function sourceRowToD1(table, source) {
 
       bundle_subject_id:
         src.bundle_subject_id != null
-          ? String(src.bundle_subject_id)
+          ? String(
+              src.bundle_subject_id
+            )
           : null,
 
       bundle_subject_name:
@@ -475,22 +562,27 @@ function sourceRowToD1(table, source) {
         null,
 
       name:
-        src.name ?? 'Untitled Test',
+        src.name ??
+        'Untitled Test',
 
       description:
-        src.description ?? null,
+        src.description ??
+        null,
 
       level:
         src.level ?? null,
 
       difficulty:
-        src.difficulty ?? null,
+        src.difficulty ??
+        null,
 
       time_limit:
-        src.time_limit ?? null,
+        src.time_limit ??
+        null,
 
       html_content:
-        src.html_content ?? null,
+        src.html_content ??
+        null,
 
       is_paid:
         a.is_paid ? 1 : 0,
@@ -508,13 +600,16 @@ function sourceRowToD1(table, source) {
         a.price,
 
       total_questions:
-        src.total_questions ?? null,
+        src.total_questions ??
+        null,
 
       updated_at:
-        src.updated_at ?? nowIso(),
+        src.updated_at ??
+        nowIso(),
 
       deleted_at:
-        src.deleted_at ?? null
+        src.deleted_at ??
+        null
     });
   }
 
@@ -524,7 +619,8 @@ function sourceRowToD1(table, source) {
         src.title ?? null,
 
       description:
-        src.description ?? null,
+        src.description ??
+        null,
 
       price:
         src.price ?? null,
@@ -536,7 +632,8 @@ function sourceRowToD1(table, source) {
         src.qrData ?? null,
 
       link_type:
-        src.link_type ?? null,
+        src.link_type ??
+        null,
 
       link:
         src.link ?? null,
@@ -545,23 +642,31 @@ function sourceRowToD1(table, source) {
         src.bundle_id == null ||
         src.bundle_id === ''
           ? null
-          : String(src.bundle_id),
+          : String(
+              src.bundle_id
+            ),
 
       subject_id:
-        src.subject_id ?? null,
+        src.subject_id ??
+        null,
 
       test_id:
-        src.test_id ?? null,
+        src.test_id ??
+        null,
 
       slide_seconds:
-        src.slide_seconds ?? null,
+        src.slide_seconds ??
+        null,
 
       updated_at:
-        src.updated_at ?? nowIso()
+        src.updated_at ??
+        nowIso()
     });
   }
 
-  else if (table === 'activation_codes') {
+  else if (
+    table === 'activation_codes'
+  ) {
     Object.assign(common, {
       code:
         src.code ??
@@ -570,72 +675,101 @@ function sourceRowToD1(table, source) {
 
       bundle_id:
         src.bundle_id != null
-          ? String(src.bundle_id)
+          ? String(
+              src.bundle_id
+            )
           : null,
 
       amount:
         src.amount ?? 0,
 
       status:
-        src.status ?? 'unused',
+        src.status ??
+        'unused',
 
       redeemed_by:
-        src.redeemed_by ?? null,
+        src.redeemed_by ??
+        null,
 
       redeemed_at:
-        src.redeemed_at ?? null,
+        src.redeemed_at ??
+        null,
 
       created_at:
-        src.created_at ?? nowIso()
+        src.created_at ??
+        nowIso()
     });
   }
 
-  else if (table === 'entitlements') {
+  else if (
+    table === 'entitlements'
+  ) {
     Object.assign(common, {
       user_key:
-        String(src.user_key ?? ''),
+        String(
+          src.user_key ?? ''
+        ),
 
       bundle_id:
         src.bundle_id != null
-          ? String(src.bundle_id)
+          ? String(
+              src.bundle_id
+            )
           : '',
 
       created_at:
-        src.created_at ?? nowIso()
+        src.created_at ??
+        nowIso()
     });
   }
 
-  else if (table === 'emp_test_submissions') {
+  else if (
+    table ===
+    'emp_test_submissions'
+  ) {
     Object.assign(common, {
       attempt_id:
-        src.attempt_id ?? id,
+        src.attempt_id ??
+        id,
 
       user_id:
         src.user_id != null
-          ? String(src.user_id)
+          ? String(
+              src.user_id
+            )
           : null,
 
       username:
-        src.username ?? null,
+        src.username ??
+        null,
 
       test_id:
         src.test_id != null
-          ? String(src.test_id)
+          ? String(
+              src.test_id
+            )
           : null,
 
       bundle_id:
         src.bundle_id != null
-          ? String(src.bundle_id)
+          ? String(
+              src.bundle_id
+            )
           : null,
 
       score:
-        src.score ?? 0,
+        src.score ??
+        src.marks ??
+        0,
 
       total_marks:
-        src.total_marks ?? 0,
+        src.total_marks ??
+        src.total_questions ??
+        0,
 
       accuracy:
-        src.accuracy ?? 0,
+        src.accuracy ??
+        null,
 
       correct:
         src.correct ?? 0,
@@ -649,10 +783,12 @@ function sourceRowToD1(table, source) {
       time_taken:
         src.time_taken ??
         src.time_seconds ??
+        src.timeTaken ??
         0,
 
       status:
-        src.status ?? 'completed',
+        src.status ??
+        'completed',
 
       completed_at:
         src.completed_at ??
@@ -664,24 +800,34 @@ function sourceRowToD1(table, source) {
     });
   }
 
-  else if (table === 'emp_analytics_events') {
+  else if (
+    table ===
+    'emp_analytics_events'
+  ) {
     Object.assign(common, {
       user_id:
         src.user_id != null
-          ? String(src.user_id)
+          ? String(
+              src.user_id
+            )
           : null,
 
       event_type:
-        src.event_type ?? null,
+        src.event_type ??
+        null,
 
       test_id:
         src.test_id != null
-          ? String(src.test_id)
+          ? String(
+              src.test_id
+            )
           : null,
 
       bundle_id:
         src.bundle_id != null
-          ? String(src.bundle_id)
+          ? String(
+              src.bundle_id
+            )
           : null,
 
       occurred_at:
@@ -690,90 +836,123 @@ function sourceRowToD1(table, source) {
     });
   }
 
-  else if (table === 'content_notifications') {
+  else if (
+    table ===
+    'content_notifications'
+  ) {
     Object.assign(common, {
       title:
-        src.title ?? null,
+        src.title ??
+        null,
 
       message:
-        src.message ?? null,
+        src.message ??
+        null,
 
       image:
-        src.image ?? null,
+        src.image ??
+        null,
 
       active:
-        src.active ?? true,
+        src.active ??
+        true,
 
       created_at:
-        src.created_at ?? nowIso(),
+        src.created_at ??
+        nowIso(),
 
       updated_at:
-        src.updated_at ?? nowIso()
+        src.updated_at ??
+        nowIso()
     });
   }
 
-  else if (table === 'admin_users') {
+  else if (
+    table === 'admin_users'
+  ) {
     Object.assign(common, {
       username:
-        src.username ?? null,
+        src.username ??
+        null,
 
       password:
-        src.password ?? null,
+        src.password ??
+        null,
 
       role:
-        src.role ?? 'admin',
+        src.role ??
+        'admin',
 
       created_at:
-        src.created_at ?? nowIso(),
+        src.created_at ??
+        nowIso(),
 
       updated_at:
-        src.updated_at ?? nowIso()
+        src.updated_at ??
+        nowIso()
     });
   }
 
-  else if (table === 'app_releases') {
+  else if (
+    table === 'app_releases'
+  ) {
     Object.assign(common, {
       version:
-        src.version ?? null,
+        src.version ??
+        null,
 
       title:
-        src.title ?? null,
+        src.title ??
+        null,
 
       notes:
-        src.notes ?? null,
+        src.notes ??
+        null,
 
       url:
-        src.url ?? null,
+        src.url ??
+        null,
 
       active:
-        src.active ?? true,
+        src.active ??
+        true,
 
       created_at:
-        src.created_at ?? nowIso(),
+        src.created_at ??
+        nowIso(),
 
       updated_at:
-        src.updated_at ?? nowIso()
+        src.updated_at ??
+        nowIso()
     });
   }
 
-  else if (table === 'cf_users') {
+  else if (
+    table === 'cf_users'
+  ) {
     Object.assign(common, {
       user_id:
         src.user_id != null
-          ? String(src.user_id)
+          ? String(
+              src.user_id
+            )
           : null,
 
       username:
-        src.username ?? null,
+        src.username ??
+        null,
 
       email:
-        src.email ?? null,
+        src.email ??
+        null,
 
       created_at:
-        src.created_at ?? nowIso(),
+        src.created_at ??
+        nowIso(),
 
       updated_at:
-        src.updated_at ?? nowIso()
+        src.updated_at ??
+        nowIso()
     });
   }
 
@@ -787,7 +966,9 @@ function d1RowToSource(row) {
 
   try {
     src = row.data_json
-      ? JSON.parse(row.data_json)
+      ? JSON.parse(
+          row.data_json
+        )
       : {};
   } catch (_) {
     src = {};
@@ -800,10 +981,6 @@ function d1RowToSource(row) {
 
   delete merged.data_json;
 
-  /*
-   * Typed D1 columns are authoritative for
-   * bundle_tests access state.
-   */
   if (
     Object.prototype.hasOwnProperty.call(
       row,
@@ -820,19 +997,21 @@ function d1RowToSource(row) {
       row.access_type;
 
     merged.is_paid =
-      Boolean(Number(row.is_paid));
+      Boolean(
+        Number(row.is_paid)
+      );
 
     merged.price =
-      Number(row.price || 0);
+      Number(
+        row.price || 0
+      );
   }
 
-  /*
-   * If HTML exists inside data_json but the
-   * typed column is empty, recover it.
-   */
   if (
     (!merged.html_content ||
-      String(merged.html_content).trim() === '') &&
+      String(
+        merged.html_content
+      ).trim() === '') &&
     src.html_content
   ) {
     merged.html_content =
@@ -842,7 +1021,10 @@ function d1RowToSource(row) {
   return merged;
 }
 
-function adminAllowed(request, env) {
+function adminAllowed(
+  request,
+  env
+) {
   const configured =
     String(
       env.ADMIN_API_KEY || ''
@@ -867,7 +1049,9 @@ async function getTableRows(
   table,
   includeDeleted = false
 ) {
-  if (table === 'bundle_tests') {
+  if (
+    table === 'bundle_tests'
+  ) {
     let query =
       'SELECT * FROM "bundle_tests"';
 
@@ -880,21 +1064,29 @@ async function getTableRows(
       ' ORDER BY "id" ASC';
 
     const result =
-      await env.DB.prepare(query).all();
+      await env.DB
+        .prepare(query)
+        .all();
 
     return (
       result.results || []
-    ).map(d1RowToSource);
+    ).map(
+      d1RowToSource
+    );
   }
 
   const result =
-    await env.DB.prepare(
-      `SELECT * FROM "${table}"`
-    ).all();
+    await env.DB
+      .prepare(
+        `SELECT * FROM "${table}"`
+      )
+      .all();
 
   return (
     result.results || []
-  ).map(d1RowToSource);
+  ).map(
+    d1RowToSource
+  );
 }
 
 async function upsertSourceRow(
@@ -905,7 +1097,8 @@ async function upsertSourceRow(
 ) {
   if (!TABLES.has(table)) {
     throw new Error(
-      'Unsupported table: ' + table
+      'Unsupported table: ' +
+        table
     );
   }
 
@@ -917,20 +1110,18 @@ async function upsertSourceRow(
         )
       : {};
 
-  /*
-   * IMPORTANT:
-   * Access-only updates must not erase
-   * existing HTML content.
-   */
   if (
     table === 'bundle_tests' &&
     source.id
   ) {
     const existing =
-      await env.DB.prepare(
-        'SELECT * FROM "bundle_tests" WHERE "id" = ? LIMIT 1'
-      )
-        .bind(String(source.id))
+      await env.DB
+        .prepare(
+          'SELECT * FROM "bundle_tests" WHERE "id" = ? LIMIT 1'
+        )
+        .bind(
+          String(source.id)
+        )
         .first();
 
     if (
@@ -941,7 +1132,9 @@ async function upsertSourceRow(
         ).trim() === '')
     ) {
       const existingSource =
-        d1RowToSource(existing);
+        d1RowToSource(
+          existing
+        );
 
       if (
         existingSource &&
@@ -981,12 +1174,19 @@ async function upsertSourceRow(
   if (conflict) {
     sql = `
       INSERT INTO "${table}"
-      (${columns.map(c => `"${c}"`).join(',')})
-      VALUES (${columns.map(() => '?').join(',')})
+      (${columns
+        .map(c => `"${c}"`)
+        .join(',')})
+      VALUES
+      (${columns
+        .map(() => '?')
+        .join(',')})
       ON CONFLICT("${conflict}")
       DO UPDATE SET
       ${columns
-        .filter(c => c !== conflict)
+        .filter(
+          c => c !== conflict
+        )
         .map(
           c =>
             `"${c}" = excluded."${c}"`
@@ -996,12 +1196,19 @@ async function upsertSourceRow(
   } else {
     sql = `
       INSERT INTO "${table}"
-      (${columns.map(c => `"${c}"`).join(',')})
-      VALUES (${columns.map(() => '?').join(',')})
+      (${columns
+        .map(c => `"${c}"`)
+        .join(',')})
+      VALUES
+      (${columns
+        .map(() => '?')
+        .join(',')})
       ON CONFLICT("id")
       DO UPDATE SET
       ${columns
-        .filter(c => c !== 'id')
+        .filter(
+          c => c !== 'id'
+        )
         .map(
           c =>
             `"${c}" = excluded."${c}"`
@@ -1010,22 +1217,24 @@ async function upsertSourceRow(
     `;
   }
 
-  await env.DB.prepare(sql)
+  await env.DB
+    .prepare(sql)
     .bind(...values)
     .run();
 
   const saved =
-    await env.DB.prepare(
-      `SELECT * FROM "${table}" WHERE "id" = ? LIMIT 1`
-    )
-      .bind(String(row.id))
+    await env.DB
+      .prepare(
+        `SELECT * FROM "${table}" WHERE "id" = ? LIMIT 1`
+      )
+      .bind(
+        String(row.id)
+      )
       .first();
 
-  return (
-    saved
-      ? d1RowToSource(saved)
-      : source
-  );
+  return saved
+    ? d1RowToSource(saved)
+    : source;
 }
 
 async function deleteByFilters(
@@ -1055,17 +1264,16 @@ async function deleteByFilters(
     return 0;
   }
 
-  /*
-   * bundle_tests use soft delete.
-   * This is important because clients need
-   * to know the test disappeared.
-   */
-  if (table === 'bundle_tests') {
+  if (
+    table === 'bundle_tests'
+  ) {
     for (const row of matching) {
       const updated = {
         ...row,
-        deleted_at: nowIso(),
-        updated_at: nowIso()
+        deleted_at:
+          nowIso(),
+        updated_at:
+          nowIso()
       };
 
       await upsertSourceRow(
@@ -1080,10 +1288,13 @@ async function deleteByFilters(
   }
 
   for (const row of matching) {
-    await env.DB.prepare(
-      `DELETE FROM "${table}" WHERE "id" = ?`
-    )
-      .bind(String(row.id))
+    await env.DB
+      .prepare(
+        `DELETE FROM "${table}" WHERE "id" = ?`
+      )
+      .bind(
+        String(row.id)
+      )
       .run();
   }
 
@@ -1098,7 +1309,8 @@ async function handleRest(
 ) {
   if (!TABLES.has(table)) {
     return bad(
-      'Unknown table: ' + table,
+      'Unknown table: ' +
+        table,
       404
     );
   }
@@ -1107,12 +1319,17 @@ async function handleRest(
     PUBLIC_TABLES.has(table);
 
   const isAdminRead =
-    ADMIN_READ_TABLES.has(table);
+    ADMIN_READ_TABLES.has(
+      table
+    );
 
   if (
     !isPublic &&
     !isAdminRead &&
-    !adminAllowed(request, env)
+    !adminAllowed(
+      request,
+      env
+    )
   ) {
     return bad(
       'Unauthorized',
@@ -1123,7 +1340,10 @@ async function handleRest(
   if (
     isAdminRead &&
     request.method === 'GET' &&
-    !adminAllowed(request, env)
+    !adminAllowed(
+      request,
+      env
+    )
   ) {
     return bad(
       'Unauthorized',
@@ -1131,7 +1351,9 @@ async function handleRest(
     );
   }
 
-  if (request.method === 'GET') {
+  if (
+    request.method === 'GET'
+  ) {
     let rows =
       await getTableRows(
         env,
@@ -1167,7 +1389,9 @@ async function handleRest(
             );
 
           if (cmp !== 0) {
-            return cmp * o.dir;
+            return (
+              cmp * o.dir
+            );
           }
         }
 
@@ -1175,14 +1399,15 @@ async function handleRest(
       });
     }
 
-    const offset = Math.max(
-      0,
-      Number(
-        url.searchParams.get(
-          'offset'
+    const offset =
+      Math.max(
+        0,
+        Number(
+          url.searchParams.get(
+            'offset'
+          ) || 0
         ) || 0
-      ) || 0
-    );
+      );
 
     const limitRaw =
       url.searchParams.get(
@@ -1194,8 +1419,7 @@ async function handleRest(
         ? rows.length
         : Math.max(
             0,
-            Number(limitRaw) ||
-              0
+            Number(limitRaw) || 0
           );
 
     rows =
@@ -1260,7 +1484,9 @@ async function handleRest(
 
     const out = [];
 
-    for (const src of rows) {
+    for (
+      const src of rows
+    ) {
       out.push(
         await upsertSourceRow(
           env,
@@ -1348,7 +1574,9 @@ async function handleRest(
 
     const out = [];
 
-    for (const row of rows) {
+    for (
+      const row of rows
+    ) {
       out.push(
         await upsertSourceRow(
           env,
@@ -1417,10 +1645,11 @@ async function handleRest(
       null,
       {
         status: 204,
-        headers: corsHeaders({
-          'X-Deleted-Rows':
-            String(count)
-        })
+        headers:
+          corsHeaders({
+            'X-Deleted-Rows':
+              String(count)
+          })
       }
     );
   }
@@ -1448,11 +1677,10 @@ async function sha256Hex(
   return [
     ...new Uint8Array(digest)
   ]
-    .map(
-      b =>
-        b
-          .toString(16)
-          .padStart(2, '0')
+    .map(b =>
+      b
+        .toString(16)
+        .padStart(2, '0')
     )
     .join('');
 }
@@ -1498,27 +1726,23 @@ async function handleRedeemActivation(
     );
   }
 
-  /*
-   * First try raw code for legacy records.
-   */
   let codeRow =
-    await env.DB.prepare(
-      'SELECT * FROM "activation_codes" WHERE "code" = ? LIMIT 1'
-    )
+    await env.DB
+      .prepare(
+        'SELECT * FROM "activation_codes" WHERE "code" = ? LIMIT 1'
+      )
       .bind(code)
       .first();
 
-  /*
-   * Then try SHA-256 hash.
-   */
   if (!codeRow) {
     const hash =
       await sha256Hex(code);
 
     codeRow =
-      await env.DB.prepare(
-        'SELECT * FROM "activation_codes" WHERE "code" = ? LIMIT 1'
-      )
+      await env.DB
+        .prepare(
+          'SELECT * FROM "activation_codes" WHERE "code" = ? LIMIT 1'
+        )
         .bind(hash)
         .first();
   }
@@ -1540,7 +1764,8 @@ async function handleRedeemActivation(
     ) !== bundleId
   ) {
     return json({
-      status: 'wrong_bundle',
+      status:
+        'wrong_bundle',
       bundle_id:
         String(
           activation.bundle_id ||
@@ -1551,7 +1776,8 @@ async function handleRedeemActivation(
 
   const status =
     String(
-      activation.status || ''
+      activation.status ||
+        ''
     ).toLowerCase();
 
   if (
@@ -1566,9 +1792,10 @@ async function handleRedeemActivation(
   }
 
   const existing =
-    await env.DB.prepare(
-      'SELECT 1 FROM "entitlements" WHERE "user_key" = ? AND "bundle_id" = ? LIMIT 1'
-    )
+    await env.DB
+      .prepare(
+        'SELECT 1 FROM "entitlements" WHERE "user_key" = ? AND "bundle_id" = ? LIMIT 1'
+      )
       .bind(
         userKey,
         bundleId
@@ -1587,25 +1814,22 @@ async function handleRedeemActivation(
   const now =
     nowIso();
 
-  const updatedActivation = {
-    ...activation,
-    status: 'used',
-    redeemed_by:
-      userKey,
-    redeemed_at:
-      now
-  };
-
-  await env.DB.prepare(
-    'UPDATE "activation_codes" SET "status" = ?, "redeemed_by" = ?, "redeemed_at" = ?, "data_json" = ? WHERE "id" = ?'
-  )
+  await env.DB
+    .prepare(
+      'UPDATE "activation_codes" SET "status" = ?, "redeemed_by" = ?, "redeemed_at" = ?, "data_json" = ? WHERE "id" = ?'
+    )
     .bind(
       'used',
       userKey,
       now,
-      JSON.stringify(
-        updatedActivation
-      ),
+      JSON.stringify({
+        ...activation,
+        status: 'used',
+        redeemed_by:
+          userKey,
+        redeemed_at:
+          now
+      }),
       String(
         codeRow.id
       )
@@ -1665,9 +1889,10 @@ async function handleGetBundleEntitlements(
   }
 
   const rows =
-    await env.DB.prepare(
-      'SELECT * FROM "entitlements" WHERE "user_key" = ? ORDER BY "created_at" DESC'
-    )
+    await env.DB
+      .prepare(
+        'SELECT * FROM "entitlements" WHERE "user_key" = ? ORDER BY "created_at" DESC'
+      )
       .bind(userKey)
       .all();
 
@@ -1723,14 +1948,15 @@ async function handleImportJson(
     return json({
       received:
         rows.length,
+
       written: 0,
+
       bundle_tests_written:
         0
     });
   }
 
-  let target =
-    table;
+  let target = table;
 
   if (
     target === 'tests'
@@ -1751,7 +1977,9 @@ async function handleImportJson(
 
   let written = 0;
 
-  for (const row of rows) {
+  for (
+    const row of rows
+  ) {
     await upsertSourceRow(
       env,
       target,
@@ -1778,31 +2006,8 @@ async function handleImportJson(
 
 /*
  * =========================================================
- * BUNDLE LIKE SYSTEM
+ * BUNDLE LIKES
  * =========================================================
- *
- * Student likes are stored as:
- *
- * emp_analytics_events
- * event_type = "bundle_like"
- *
- * data_json contains:
- * {
- *   bundle_id,
- *   user_id,
- *   ...
- * }
- *
- * Public count is calculated using DISTINCT user_id.
- *
- * Therefore:
- * - Same user cannot artificially increase count
- * - Refreshing/repeating event does not inflate count
- * - Multiple users can like the same bundle
- *
- * Admin/manual likes can continue to live in bundle
- * metadata as "likes" / "like_count" and the client can
- * display manual + student count.
  */
 
 async function handleBundleLikeCounts(
@@ -1858,9 +2063,11 @@ async function handleBundleLikeCounts(
           DISTINCT user_id
         ) AS like_count
 
-      FROM "emp_analytics_events"
+      FROM
+        "emp_analytics_events"
 
-      WHERE event_type =
+      WHERE
+        event_type =
         'bundle_like'
 
       AND json_extract(
@@ -1897,11 +2104,15 @@ async function handleBundleLikeCounts(
 
   const counts = {};
 
-  for (const id of ids) {
+  for (
+    const id of ids
+  ) {
     counts[id] = 0;
   }
 
-  for (const row of rows) {
+  for (
+    const row of rows
+  ) {
     const id =
       String(
         row.bundle_id ?? ''
@@ -1955,10 +2166,6 @@ async function handleAnalyticsEvent(
       nowIso()
   };
 
-  /*
-   * Bundle likes are intentionally recorded
-   * as analytics events.
-   */
   await upsertSourceRow(
     env,
     'emp_analytics_events',
@@ -1978,8 +2185,7 @@ async function handleAnalyticsEvent(
  */
 
 function rankNumber(v) {
-  const n =
-    Number(v);
+  const n = Number(v);
 
   return Number.isFinite(n)
     ? n
@@ -1993,9 +2199,7 @@ function buildLeaderboard(
 ) {
   const clean =
     rows
-      .map(
-        d1RowToSource
-      )
+      .map(d1RowToSource)
       .filter(
         r =>
           String(
@@ -2003,123 +2207,340 @@ function buildLeaderboard(
               'completed'
           ).toLowerCase() ===
           'completed'
-      );
+      )
+      .map(r => ({
+        ...r,
 
-  clean.sort((a, b) => {
-    const score =
-      rankNumber(
-        b.score
-      ) -
-      rankNumber(
-        a.score
-      );
+        score:
+          rankNumber(
+            r.score ??
+              r.marks
+          ),
 
-    if (score) {
-      return score;
+        total_marks:
+          rankNumber(
+            r.total_marks ??
+              r.total_questions
+          ),
+
+        accuracy:
+          Number.isFinite(
+            Number(
+              r.accuracy
+            )
+          )
+            ? Number(
+                r.accuracy
+              )
+            : (() => {
+                const c =
+                  rankNumber(
+                    r.correct
+                  );
+
+                const w =
+                  rankNumber(
+                    r.wrong
+                  );
+
+                return c + w > 0
+                  ? Number(
+                      (
+                        (c /
+                          (c + w)) *
+                        100
+                      ).toFixed(2)
+                    )
+                  : 0;
+              })(),
+
+        correct:
+          rankNumber(
+            r.correct
+          ),
+
+        wrong:
+          rankNumber(
+            r.wrong
+          ),
+
+        skipped:
+          rankNumber(
+            r.skipped
+          ),
+
+        time_taken:
+          rankNumber(
+            r.time_taken ??
+              r.time_seconds ??
+              r.timeTaken
+          ),
+
+        attempt_id:
+          r.attempt_id ||
+          r.id
+      }));
+
+  /*
+   * Compare two attempts:
+   * 1. Higher score wins
+   * 2. Higher accuracy wins
+   * 3. Lower time wins
+   * 4. Stable attempt_id tie breaker
+   */
+  const better = (a, b) => {
+    const ds =
+      Number(a.score || 0) -
+      Number(b.score || 0);
+
+    if (ds) {
+      return ds > 0;
     }
 
-    const acc =
-      rankNumber(
-        b.accuracy
-      ) -
-      rankNumber(
-        a.accuracy
-      );
+    const da =
+      Number(a.accuracy || 0) -
+      Number(b.accuracy || 0);
 
-    if (acc) {
-      return acc;
+    if (da) {
+      return da > 0;
     }
 
-    const time =
-      rankNumber(
-        a.time_taken ??
-          a.time_seconds ??
-          999999
+    const dt =
+      Number(
+        b.time_taken ||
+          1e9
       ) -
-      rankNumber(
-        b.time_taken ??
-          b.time_seconds ??
-          999999
+      Number(
+        a.time_taken ||
+          1e9
       );
 
-    if (time) {
-      return time;
+    if (dt) {
+      return dt > 0;
     }
 
-    return String(
-      a.completed_at ||
-        a.created_at ||
-        ''
-    ).localeCompare(
+    return (
       String(
-        b.completed_at ||
-          b.created_at ||
-          ''
+        a.attempt_id || ''
+      ) <
+      String(
+        b.attempt_id || ''
       )
     );
-  });
+  };
+
+  /*
+   * One ranking entry per student.
+   */
+  const best =
+    new Map();
+
+  for (
+    const row of clean
+  ) {
+    const key =
+      String(
+        row.user_id || ''
+      );
+
+    if (!key) continue;
+
+    const old =
+      best.get(key);
+
+    if (
+      !old ||
+      better(row, old)
+    ) {
+      best.set(
+        key,
+        row
+      );
+    }
+  }
+
+  /*
+   * IMPORTANT:
+   * If the user opened ranking for a specific
+   * attempt, preserve that exact attempt.
+   *
+   * This prevents the leaderboard from replacing
+   * the user's selected attempt with another
+   * historical attempt.
+   */
+  const selected =
+    attemptId
+      ? clean.find(
+          r =>
+            String(
+              r.attempt_id
+            ) ===
+            String(
+              attemptId
+            )
+        )
+      : null;
+
+  if (
+    selected &&
+    selected.user_id != null
+  ) {
+    best.set(
+      String(
+        selected.user_id
+      ),
+      selected
+    );
+  }
+
+  /*
+   * Sort:
+   * Higher score first
+   * Higher accuracy second
+   * Lower time third
+   */
+  const list =
+    [
+      ...best.values()
+    ].sort(
+      (a, b) =>
+        better(a, b)
+          ? -1
+          : better(b, a)
+          ? 1
+          : 0
+    );
+
+  const n =
+    list.length;
+
+  let lastKey = '';
+  let lastRank = 0;
 
   const leaderboard =
-    clean.map((r, i) => ({
-      rank:
-        i + 1,
+    list.map(
+      (r, i) => {
+        const key =
+          Number(
+            r.score || 0
+          ) +
+          '|' +
+          Number(
+            r.accuracy || 0
+          ).toFixed(4) +
+          '|' +
+          Number(
+            r.time_taken || 0
+          );
 
-      user_id:
-        r.user_id,
+        /*
+         * Equal score + accuracy + time
+         * receives the same rank.
+         */
+        const rank =
+          key === lastKey
+            ? lastRank
+            : i + 1;
 
-      username:
-        r.username ||
-        'User',
+        lastKey = key;
+        lastRank = rank;
 
-      score:
-        rankNumber(
-          r.score
-        ),
+        return {
+          rank,
 
-      total_marks:
-        rankNumber(
-          r.total_marks
-        ),
+          user_id:
+            r.user_id,
 
-      accuracy:
-        rankNumber(
-          r.accuracy
-        ),
+          username:
+            r.username ||
+            'User',
 
-      correct:
-        rankNumber(
-          r.correct
-        ),
+          score:
+            rankNumber(
+              r.score
+            ),
 
-      wrong:
-        rankNumber(
-          r.wrong
-        ),
+          total_marks:
+            rankNumber(
+              r.total_marks
+            ),
 
-      skipped:
-        rankNumber(
-          r.skipped
-        ),
+          accuracy:
+            rankNumber(
+              r.accuracy
+            ),
 
-      time_taken:
-        rankNumber(
-          r.time_taken
-        ),
+          correct:
+            rankNumber(
+              r.correct
+            ),
 
-      attempt_id:
-        r.attempt_id,
+          wrong:
+            rankNumber(
+              r.wrong
+            ),
 
-      test_id:
-        r.test_id,
+          skipped:
+            rankNumber(
+              r.skipped
+            ),
 
-      completed_at:
-        r.completed_at ||
-        r.created_at
-    }));
+          time_taken:
+            rankNumber(
+              r.time_taken
+            ),
 
+          attempt_id:
+            r.attempt_id,
+
+          test_id:
+            r.test_id,
+
+          completed_at:
+            r.completed_at ||
+            r.created_at,
+
+          /*
+           * This is what the HTML uses to show
+           * YOU on the leaderboard.
+           */
+          is_you:
+            (
+              attemptId &&
+              String(
+                r.attempt_id
+              ) ===
+              String(
+                attemptId
+              )
+            ) ||
+            (
+              !attemptId &&
+              userId &&
+              String(
+                r.user_id
+              ) ===
+              String(
+                userId
+              )
+            )
+        };
+      }
+    );
+
+  /*
+   * Find current user's exact row.
+   *
+   * First priority:
+   * exact attempt_id
+   *
+   * Second priority:
+   * user_id
+   */
   const me =
     leaderboard.find(
       r =>
+        attemptId &&
         String(
           r.attempt_id
         ) ===
@@ -2129,28 +2550,68 @@ function buildLeaderboard(
     ) ||
     leaderboard.find(
       r =>
+        userId &&
         String(
           r.user_id
         ) ===
         String(
           userId
         )
-    );
+    ) ||
+    null;
 
   if (me) {
+    me.is_you = true;
+  }
+
+  /*
+   * Percentile:
+   *
+   * 1 participant = 100
+   *
+   * Otherwise:
+   * ((participants - rank) /
+   *  (participants - 1)) * 100
+   */
+  if (me) {
     me.percentile =
-      leaderboard.length <= 1
+      n <= 1
         ? 100
         : Number(
             (
               (
-                (leaderboard.length -
+                (n -
                   me.rank) /
-                leaderboard.length
+                (n - 1)
               ) *
               100
             ).toFixed(2)
           );
+  }
+
+  /*
+   * Give every leaderboard row its percentile.
+   */
+  for (
+    const r of leaderboard
+  ) {
+    if (
+      r.percentile == null
+    ) {
+      r.percentile =
+        n <= 1
+          ? 100
+          : Number(
+              (
+                (
+                  (n -
+                    r.rank) /
+                  (n - 1)
+                ) *
+                100
+              ).toFixed(2)
+            );
+    }
   }
 
   return {
@@ -2159,14 +2620,20 @@ function buildLeaderboard(
     leaderboard,
 
     participants:
-      leaderboard.length,
+      n,
 
     user:
-      me || null,
+      me,
+
+    rank:
+      me
+        ? me.rank
+        : null,
 
     percentile:
-      me?.percentile ??
-      null
+      me
+        ? me.percentile
+        : null
   };
 }
 
@@ -2225,6 +2692,7 @@ async function handleRankSubmit(
 
   return json({
     success: true,
+
     source:
       'cloudflare_d1'
   });
@@ -2264,9 +2732,10 @@ async function handleRankLeaderboard(
   }
 
   const rows =
-    await env.DB.prepare(
-      'SELECT * FROM "emp_test_submissions" WHERE "test_id" = ? AND "status" = ?'
-    )
+    await env.DB
+      .prepare(
+        'SELECT * FROM "emp_test_submissions" WHERE "test_id" = ? AND "status" = ?'
+      )
       .bind(
         testId,
         'completed'
@@ -2281,12 +2750,6 @@ async function handleRankLeaderboard(
     )
   );
 }
-
-/*
- * =========================================================
- * ROUTER
- * =========================================================
- */
 
 async function route(
   request,
@@ -2313,7 +2776,7 @@ async function route(
 
   try {
     /*
-     * JSON import
+     * JSON IMPORT
      */
     if (
       url.pathname ===
@@ -2326,7 +2789,7 @@ async function route(
     }
 
     /*
-     * Bundle like counts
+     * BUNDLE LIKE COUNTS
      */
     if (
       url.pathname ===
@@ -2340,7 +2803,7 @@ async function route(
     }
 
     /*
-     * Analytics event
+     * ANALYTICS EVENT
      */
     if (
       url.pathname ===
@@ -2353,7 +2816,7 @@ async function route(
     }
 
     /*
-     * Ranking submit
+     * RANK SUBMIT
      */
     if (
       url.pathname ===
@@ -2366,7 +2829,7 @@ async function route(
     }
 
     /*
-     * Ranking leaderboard
+     * RANK LEADERBOARD
      */
     if (
       url.pathname ===
@@ -2380,7 +2843,7 @@ async function route(
     }
 
     /*
-     * Activation RPC
+     * ACTIVATION RPC
      */
     if (
       url.pathname ===
@@ -2393,7 +2856,7 @@ async function route(
     }
 
     /*
-     * Entitlements RPC
+     * ENTITLEMENTS RPC
      */
     if (
       url.pathname ===
@@ -2406,7 +2869,7 @@ async function route(
     }
 
     /*
-     * Supabase-compatible REST layer
+     * REST API
      */
     if (
       url.pathname.startsWith(
@@ -2443,12 +2906,11 @@ async function route(
     }
 
     /*
-     * Health check
+     * HEALTH CHECK
      */
     if (
       url.pathname === '/' ||
-      url.pathname ===
-        '/health'
+      url.pathname === '/health'
     ) {
       return json({
         ok: true,
@@ -2457,7 +2919,7 @@ async function route(
           'ExamMaster Pro Cloudflare Worker',
 
         version:
-          'V5.159-BUNDLE-LIKES-SYNC',
+          'V5.160-RANKING-YOU-FIXED',
 
         time:
           nowIso()
