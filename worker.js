@@ -1,62 +1,27 @@
 /*
  * ExamMaster Pro - Cloudflare Worker / D1
- * V5.160 - RANKING YOU FIXED
- *
- * Fixes:
- * 1. bundle_tests access state is authoritative.
- * 2. Access-only test updates never erase existing html_content.
- * 3. Activation entitlement RPCs.
- * 4. Bundle like-count endpoint.
- * 5. Analytics events.
- * 6. Ranking submit.
- * 7. Ranking leaderboard:
- *    - One best ranking entry per student
- *    - Selected attempt is preserved
- *    - Exact attempt_id identifies YOU
- *    - user_id fallback identifies YOU
- *    - Rank calculated correctly
- *    - Percentile calculated correctly
- *    - is_you returned for every leaderboard row
+ * V5.161 - ANALYTICS CLEAR + RANK ADMIN FIX
  */
 
 const TABLES = new Set([
-  'subjects',
-  'notes',
-  'bundles',
-  'bundle_tests',
-  'banners',
-  'activation_codes',
-  'entitlements',
-  'emp_test_submissions',
-  'emp_analytics_events',
-  'content_notifications',
-  'admin_users',
-  'app_releases',
-  'cf_users'
+  'subjects','notes','bundles','bundle_tests','banners','activation_codes',
+  'entitlements','emp_test_submissions','emp_analytics_events',
+  'content_notifications','admin_users','app_releases','cf_users'
 ]);
 
 const PUBLIC_TABLES = new Set([
-  'subjects',
-  'notes',
-  'bundles',
-  'bundle_tests',
-  'banners',
-  'content_notifications',
-  'app_releases'
+  'subjects','notes','bundles','bundle_tests','banners',
+  'content_notifications','app_releases'
 ]);
 
 const ADMIN_READ_TABLES = new Set([
-  'activation_codes',
-  'emp_analytics_events',
-  'admin_users',
-  'cf_users'
+  'activation_codes','emp_analytics_events','admin_users','cf_users'
 ]);
 
 function corsHeaders(extra = {}) {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods':
-      'GET,POST,PATCH,PUT,DELETE,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
     'Access-Control-Allow-Headers':
       'Content-Type, Authorization, apikey, Prefer, X-EMP-Admin-Key, X-Client-Role',
     'Access-Control-Max-Age': '86400',
@@ -68,39 +33,25 @@ function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: corsHeaders({
-      'Content-Type':
-        'application/json; charset=utf-8',
+      'Content-Type': 'application/json; charset=utf-8',
       ...extra
     })
   });
 }
 
-function text(
-  body,
-  status = 200,
-  contentType = 'text/plain; charset=utf-8'
-) {
+function text(body, status = 200, contentType = 'text/plain; charset=utf-8') {
   return new Response(body, {
     status,
-    headers: corsHeaders({
-      'Content-Type': contentType
-    })
+    headers: corsHeaders({ 'Content-Type': contentType })
   });
 }
 
-function bad(
-  message,
-  status = 400,
-  details = null
-) {
-  return json(
-    {
-      code: status,
-      message,
-      ...(details ? { details } : {})
-    },
-    status
-  );
+function bad(message, status = 400, details = null) {
+  return json({
+    code: status,
+    message,
+    ...(details ? { details } : {})
+  }, status);
 }
 
 function nowIso() {
@@ -109,16 +60,12 @@ function nowIso() {
 
 function cleanIdent(v) {
   const s = String(v || '');
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s)
-    ? s
-    : null;
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) ? s : null;
 }
 
 function decodeFilterValue(raw) {
   try {
-    return decodeURIComponent(
-      String(raw ?? '')
-    );
+    return decodeURIComponent(String(raw ?? ''));
   } catch (_) {
     return String(raw ?? '');
   }
@@ -128,23 +75,12 @@ function parseFilters(url) {
   const filters = [];
 
   for (const [key, value] of url.searchParams.entries()) {
-    if (
-      [
-        'select',
-        'order',
-        'limit',
-        'offset',
-        'on_conflict',
-        'columns',
-        'apikey'
-      ].includes(key)
-    ) {
-      continue;
-    }
+    if ([
+      'select','order','limit','offset','on_conflict',
+      'columns','apikey'
+    ].includes(key)) continue;
 
-    if (key === 'or' || key === 'and') {
-      continue;
-    }
+    if (key === 'or' || key === 'and') continue;
 
     const m = String(value).match(
       /^(eq|neq|gt|gte|lt|lte|in|is|like|ilike)\.(.*)$/s
@@ -162,27 +98,16 @@ function parseFilters(url) {
         .split(',')
         .map(x => x.trim())
         .filter(Boolean)
-        .map(x =>
-          x.replace(/^"|"$/g, '')
-        )
+        .map(x => x.replace(/^"|"$/g, ''))
         .map(decodeFilterValue);
     } else if (op === 'is') {
-      const low =
-        String(val).toLowerCase();
-
-      val =
-        low === 'null'
-          ? null
-          : low === 'true';
+      const low = String(val).toLowerCase();
+      val = low === 'null' ? null : low === 'true';
     } else {
       val = decodeFilterValue(val);
     }
 
-    filters.push({
-      key,
-      op,
-      val
-    });
+    filters.push({ key, op, val });
   }
 
   return filters;
@@ -208,20 +133,14 @@ function compareValue(a, b) {
   const da = Date.parse(String(a));
   const db = Date.parse(String(b));
 
-  if (
-    Number.isFinite(da) &&
-    Number.isFinite(db)
-  ) {
+  if (Number.isFinite(da) && Number.isFinite(db)) {
     return da - db;
   }
 
   return String(a).localeCompare(
     String(b),
     undefined,
-    {
-      numeric: true,
-      sensitivity: 'base'
-    }
+    { numeric: true, sensitivity: 'base' }
   );
 }
 
@@ -232,69 +151,42 @@ function rowMatches(row, filters) {
 
     switch (f.op) {
       case 'eq':
-        return (
-          String(actual ?? '') ===
-          String(val ?? '')
-        );
+        return String(actual ?? '') === String(val ?? '');
 
       case 'neq':
-        return (
-          String(actual ?? '') !==
-          String(val ?? '')
-        );
+        return String(actual ?? '') !== String(val ?? '');
 
       case 'gt':
-        return (
-          compareValue(actual, val) > 0
-        );
+        return compareValue(actual, val) > 0;
 
       case 'gte':
-        return (
-          compareValue(actual, val) >= 0
-        );
+        return compareValue(actual, val) >= 0;
 
       case 'lt':
-        return (
-          compareValue(actual, val) < 0
-        );
+        return compareValue(actual, val) < 0;
 
       case 'lte':
-        return (
-          compareValue(actual, val) <= 0
-        );
+        return compareValue(actual, val) <= 0;
 
       case 'in':
-        return (
-          Array.isArray(val) &&
-          val.some(
-            x =>
-              String(actual ?? '') ===
-              String(x)
-          )
-        );
+        return Array.isArray(val) &&
+          val.some(x => String(actual ?? '') === String(x));
 
       case 'is':
         return val === null
           ? actual == null
-          : Boolean(actual) ===
-            Boolean(val);
+          : Boolean(actual) === Boolean(val);
 
       case 'like':
-        return String(actual ?? '')
-          .includes(
-            String(val).replace(
-              /%/g,
-              ''
-            )
-          );
+        return String(actual ?? '').includes(
+          String(val).replace(/%/g, '')
+        );
 
       case 'ilike':
         return String(actual ?? '')
           .toLowerCase()
           .includes(
-            String(val)
-              .replace(/%/g, '')
-              .toLowerCase()
+            String(val).replace(/%/g, '').toLowerCase()
           );
 
       default:
@@ -304,15 +196,11 @@ function rowMatches(row, filters) {
 }
 
 function parseSelect(raw) {
-  if (!raw || raw === '*') {
-    return null;
-  }
+  if (!raw || raw === '*') return null;
 
   return String(raw)
     .split(',')
-    .map(s =>
-      cleanIdent(s.trim())
-    )
+    .map(s => cleanIdent(s.trim()))
     .filter(Boolean);
 }
 
@@ -334,16 +222,12 @@ function parseOrder(raw) {
   return String(raw)
     .split(',')
     .map(part => {
-      const p =
-        part.trim().split('.');
+      const p = part.trim().split('.');
 
       return {
         field: cleanIdent(p[0]),
         dir:
-          String(
-            p[1] || 'asc'
-          ).toLowerCase() ===
-          'desc'
+          String(p[1] || 'asc').toLowerCase() === 'desc'
             ? -1
             : 1
       };
@@ -352,25 +236,20 @@ function parseOrder(raw) {
 }
 
 function normalizeAccessState(source) {
-  const s =
-    source &&
-    typeof source === 'object'
-      ? source
-      : {};
+  const s = source && typeof source === 'object'
+    ? source
+    : {};
 
   const values = [
     s.access_mode,
     s.access_override,
     s.access_type
-  ].map(v =>
-    String(v ?? '').toLowerCase()
-  );
+  ].map(v => String(v ?? '').toLowerCase());
 
   if (
     values.includes('paid') ||
     s.is_paid === true ||
-    String(s.is_paid).toLowerCase() ===
-      'true' ||
+    String(s.is_paid).toLowerCase() === 'true' ||
     Number(s.is_paid) === 1 ||
     Number(s.price) > 0
   ) {
@@ -380,8 +259,7 @@ function normalizeAccessState(source) {
   if (
     values.includes('free') ||
     s.is_paid === false ||
-    String(s.is_paid).toLowerCase() ===
-      'false' ||
+    String(s.is_paid).toLowerCase() === 'false' ||
     Number(s.is_paid) === 0
   ) {
     return 'free';
@@ -391,49 +269,29 @@ function normalizeAccessState(source) {
 }
 
 function normalizeTestAccess(source) {
-  const s =
-    source &&
-    typeof source === 'object'
-      ? source
-      : {};
+  const s = source && typeof source === 'object'
+    ? source
+    : {};
 
-  const state =
-    normalizeAccessState(s);
+  const state = normalizeAccessState(s);
 
   return {
     state,
-
     access_mode: state,
-
     access_override: state,
-
     access_type: state,
-
-    is_paid:
-      state === 'paid',
-
+    is_paid: state === 'paid',
     price:
       state === 'paid'
-        ? Math.max(
-            0,
-            Number(s.price || 0) ||
-              0
-          )
+        ? Math.max(0, Number(s.price || 0) || 0)
         : 0
   };
 }
 
-function sourceRowToD1(
-  table,
-  source
-) {
-  const src =
-    source &&
-    typeof source === 'object'
-      ? JSON.parse(
-          JSON.stringify(source)
-        )
-      : {};
+function sourceRowToD1(table, source) {
+  const src = source && typeof source === 'object'
+    ? JSON.parse(JSON.stringify(source))
+    : {};
 
   const id =
     src.id != null
@@ -442,31 +300,17 @@ function sourceRowToD1(
 
   const common = {
     id,
-    data_json:
-      JSON.stringify(src)
+    data_json: JSON.stringify(src)
   };
 
   if (table === 'subjects') {
     Object.assign(common, {
-      name:
-        src.name ?? null,
-
-      description:
-        src.description ?? null,
-
-      icon:
-        src.icon ?? null,
-
-      color:
-        src.color ?? null,
-
-      created_at:
-        src.created_at ??
-        nowIso(),
-
-      updated_at:
-        src.updated_at ??
-        nowIso()
+      name: src.name ?? null,
+      description: src.description ?? null,
+      icon: src.icon ?? null,
+      color: src.color ?? null,
+      created_at: src.created_at ?? nowIso(),
+      updated_at: src.updated_at ?? nowIso()
     });
   }
 
@@ -474,75 +318,36 @@ function sourceRowToD1(
     Object.assign(common, {
       subject_id:
         src.subject_id != null
-          ? String(
-              src.subject_id
-            )
+          ? String(src.subject_id)
           : null,
-
-      title:
-        src.title ?? null,
-
-      content:
-        src.content ?? null,
-
-      file_data:
-        src.file_data ?? null,
-
-      file_name:
-        src.file_name ?? null,
-
-      file_type:
-        src.file_type ?? null,
-
-      created_at:
-        src.created_at ??
-        nowIso(),
-
-      updated_at:
-        src.updated_at ??
-        nowIso()
+      title: src.title ?? null,
+      content: src.content ?? null,
+      file_data: src.file_data ?? null,
+      file_name: src.file_name ?? null,
+      file_type: src.file_type ?? null,
+      created_at: src.created_at ?? nowIso(),
+      updated_at: src.updated_at ?? nowIso()
     });
   }
 
   else if (table === 'bundles') {
     Object.assign(common, {
-      name:
-        src.name ??
-        'Untitled Bundle',
-
-      description:
-        src.description ??
-        null,
-
-      updated_at:
-        src.updated_at ??
-        nowIso()
+      name: src.name ?? 'Untitled Bundle',
+      description: src.description ?? null,
+      updated_at: src.updated_at ?? nowIso()
     });
   }
 
-  else if (
-    table === 'bundle_tests'
-  ) {
-    const a =
-      normalizeTestAccess(src);
+  else if (table === 'bundle_tests') {
+    const a = normalizeTestAccess(src);
 
-    src.access_mode =
-      a.access_mode;
+    src.access_mode = a.access_mode;
+    src.access_override = a.access_override;
+    src.access_type = a.access_type;
+    src.is_paid = a.is_paid;
+    src.price = a.price;
 
-    src.access_override =
-      a.access_override;
-
-    src.access_type =
-      a.access_type;
-
-    src.is_paid =
-      a.is_paid;
-
-    src.price =
-      a.price;
-
-    common.data_json =
-      JSON.stringify(src);
+    common.data_json = JSON.stringify(src);
 
     Object.assign(common, {
       bundle_id:
@@ -552,37 +357,29 @@ function sourceRowToD1(
 
       bundle_subject_id:
         src.bundle_subject_id != null
-          ? String(
-              src.bundle_subject_id
-            )
+          ? String(src.bundle_subject_id)
           : null,
 
       bundle_subject_name:
-        src.bundle_subject_name ??
-        null,
+        src.bundle_subject_name ?? null,
 
       name:
-        src.name ??
-        'Untitled Test',
+        src.name ?? 'Untitled Test',
 
       description:
-        src.description ??
-        null,
+        src.description ?? null,
 
       level:
         src.level ?? null,
 
       difficulty:
-        src.difficulty ??
-        null,
+        src.difficulty ?? null,
 
       time_limit:
-        src.time_limit ??
-        null,
+        src.time_limit ?? null,
 
       html_content:
-        src.html_content ??
-        null,
+        src.html_content ?? null,
 
       is_paid:
         a.is_paid ? 1 : 0,
@@ -600,73 +397,39 @@ function sourceRowToD1(
         a.price,
 
       total_questions:
-        src.total_questions ??
-        null,
+        src.total_questions ?? null,
 
       updated_at:
-        src.updated_at ??
-        nowIso(),
+        src.updated_at ?? nowIso(),
 
       deleted_at:
-        src.deleted_at ??
-        null
+        src.deleted_at ?? null
     });
   }
 
   else if (table === 'banners') {
     Object.assign(common, {
-      title:
-        src.title ?? null,
-
-      description:
-        src.description ??
-        null,
-
-      price:
-        src.price ?? null,
-
-      image:
-        src.image ?? null,
-
-      qrData:
-        src.qrData ?? null,
-
-      link_type:
-        src.link_type ??
-        null,
-
-      link:
-        src.link ?? null,
+      title: src.title ?? null,
+      description: src.description ?? null,
+      price: src.price ?? null,
+      image: src.image ?? null,
+      qrData: src.qrData ?? null,
+      link_type: src.link_type ?? null,
+      link: src.link ?? null,
 
       bundle_id:
-        src.bundle_id == null ||
-        src.bundle_id === ''
+        src.bundle_id == null || src.bundle_id === ''
           ? null
-          : String(
-              src.bundle_id
-            ),
+          : String(src.bundle_id),
 
-      subject_id:
-        src.subject_id ??
-        null,
-
-      test_id:
-        src.test_id ??
-        null,
-
-      slide_seconds:
-        src.slide_seconds ??
-        null,
-
-      updated_at:
-        src.updated_at ??
-        nowIso()
+      subject_id: src.subject_id ?? null,
+      test_id: src.test_id ?? null,
+      slide_seconds: src.slide_seconds ?? null,
+      updated_at: src.updated_at ?? nowIso()
     });
   }
 
-  else if (
-    table === 'activation_codes'
-  ) {
+  else if (table === 'activation_codes') {
     Object.assign(common, {
       code:
         src.code ??
@@ -675,92 +438,69 @@ function sourceRowToD1(
 
       bundle_id:
         src.bundle_id != null
-          ? String(
-              src.bundle_id
-            )
+          ? String(src.bundle_id)
           : null,
 
       amount:
         src.amount ?? 0,
 
       status:
-        src.status ??
-        'unused',
+        src.status ?? 'unused',
 
       redeemed_by:
-        src.redeemed_by ??
-        null,
+        src.redeemed_by ?? null,
 
       redeemed_at:
-        src.redeemed_at ??
-        null,
+        src.redeemed_at ?? null,
 
       created_at:
-        src.created_at ??
-        nowIso()
+        src.created_at ?? nowIso()
     });
   }
 
-  else if (
-    table === 'entitlements'
-  ) {
+  else if (table === 'entitlements') {
     Object.assign(common, {
       user_key:
-        String(
-          src.user_key ?? ''
-        ),
+        String(src.user_key ?? ''),
 
       bundle_id:
         src.bundle_id != null
-          ? String(
-              src.bundle_id
-            )
+          ? String(src.bundle_id)
           : '',
 
       created_at:
-        src.created_at ??
-        nowIso()
+        src.created_at ?? nowIso()
     });
   }
 
-  else if (
-    table ===
-    'emp_test_submissions'
-  ) {
+  else if (table === 'emp_test_submissions') {
     Object.assign(common, {
       attempt_id:
-        src.attempt_id ??
-        id,
+        src.attempt_id ?? id,
 
       user_id:
         src.user_id != null
-          ? String(
-              src.user_id
-            )
+          ? String(src.user_id)
           : null,
 
       username:
-        src.username ??
-        null,
+        src.username ?? null,
 
       test_id:
         src.test_id != null
-          ? String(
-              src.test_id
-            )
+          ? String(src.test_id)
           : null,
+
+      test_name:
+        src.test_name ?? null,
 
       bundle_id:
         src.bundle_id != null
-          ? String(
-              src.bundle_id
-            )
+          ? String(src.bundle_id)
           : null,
 
       score:
-        src.score ??
-        src.marks ??
-        0,
+        src.score ?? src.marks ?? 0,
 
       total_marks:
         src.total_marks ??
@@ -768,8 +508,7 @@ function sourceRowToD1(
         0,
 
       accuracy:
-        src.accuracy ??
-        null,
+        src.accuracy ?? 0,
 
       correct:
         src.correct ?? 0,
@@ -787,173 +526,49 @@ function sourceRowToD1(
         0,
 
       status:
-        src.status ??
-        'completed',
+        src.status ?? 'completed',
 
       completed_at:
         src.completed_at ??
+        src.created_at ??
         nowIso(),
 
       created_at:
         src.created_at ??
+        nowIso(),
+
+      updated_at:
+        src.updated_at ??
         nowIso()
     });
   }
 
-  else if (
-    table ===
-    'emp_analytics_events'
-  ) {
+  else if (table === 'emp_analytics_events') {
     Object.assign(common, {
       user_id:
         src.user_id != null
-          ? String(
-              src.user_id
-            )
+          ? String(src.user_id)
           : null,
+
+      username:
+        src.username ?? null,
 
       event_type:
-        src.event_type ??
-        null,
-
-      test_id:
-        src.test_id != null
-          ? String(
-              src.test_id
-            )
-          : null,
-
-      bundle_id:
-        src.bundle_id != null
-          ? String(
-              src.bundle_id
-            )
-          : null,
+        src.event_type ?? null,
 
       occurred_at:
         src.occurred_at ??
+        src.created_at ??
+        nowIso(),
+
+      created_at:
+        src.created_at ??
         nowIso()
     });
   }
 
-  else if (
-    table ===
-    'content_notifications'
-  ) {
-    Object.assign(common, {
-      title:
-        src.title ??
-        null,
-
-      message:
-        src.message ??
-        null,
-
-      image:
-        src.image ??
-        null,
-
-      active:
-        src.active ??
-        true,
-
-      created_at:
-        src.created_at ??
-        nowIso(),
-
-      updated_at:
-        src.updated_at ??
-        nowIso()
-    });
-  }
-
-  else if (
-    table === 'admin_users'
-  ) {
-    Object.assign(common, {
-      username:
-        src.username ??
-        null,
-
-      password:
-        src.password ??
-        null,
-
-      role:
-        src.role ??
-        'admin',
-
-      created_at:
-        src.created_at ??
-        nowIso(),
-
-      updated_at:
-        src.updated_at ??
-        nowIso()
-    });
-  }
-
-  else if (
-    table === 'app_releases'
-  ) {
-    Object.assign(common, {
-      version:
-        src.version ??
-        null,
-
-      title:
-        src.title ??
-        null,
-
-      notes:
-        src.notes ??
-        null,
-
-      url:
-        src.url ??
-        null,
-
-      active:
-        src.active ??
-        true,
-
-      created_at:
-        src.created_at ??
-        nowIso(),
-
-      updated_at:
-        src.updated_at ??
-        nowIso()
-    });
-  }
-
-  else if (
-    table === 'cf_users'
-  ) {
-    Object.assign(common, {
-      user_id:
-        src.user_id != null
-          ? String(
-              src.user_id
-            )
-          : null,
-
-      username:
-        src.username ??
-        null,
-
-      email:
-        src.email ??
-        null,
-
-      created_at:
-        src.created_at ??
-        nowIso(),
-
-      updated_at:
-        src.updated_at ??
-        nowIso()
-    });
+  else {
+    Object.assign(common, src);
   }
 
   return common;
@@ -965,11 +580,9 @@ function d1RowToSource(row) {
   let src = {};
 
   try {
-    src = row.data_json
-      ? JSON.parse(
-          row.data_json
-        )
-      : {};
+    if (row.data_json) {
+      src = JSON.parse(row.data_json) || {};
+    }
   } catch (_) {
     src = {};
   }
@@ -981,324 +594,258 @@ function d1RowToSource(row) {
 
   delete merged.data_json;
 
-  if (
-    Object.prototype.hasOwnProperty.call(
-      row,
-      'access_mode'
-    )
-  ) {
-    merged.access_mode =
-      row.access_mode;
-
-    merged.access_override =
-      row.access_override;
-
-    merged.access_type =
-      row.access_type;
-
-    merged.is_paid =
-      Boolean(
-        Number(row.is_paid)
-      );
-
-    merged.price =
-      Number(
-        row.price || 0
-      );
-  }
-
-  if (
-    (!merged.html_content ||
-      String(
-        merged.html_content
-      ).trim() === '') &&
-    src.html_content
-  ) {
-    merged.html_content =
-      src.html_content;
-  }
-
   return merged;
 }
 
-function adminAllowed(
-  request,
-  env
-) {
-  const configured =
-    String(
-      env.ADMIN_API_KEY || ''
-    ).trim();
+function adminAllowed(request, env) {
+  const configured = String(
+    env.ADMIN_API_KEY || ''
+  ).trim();
 
   if (!configured) {
     return true;
   }
 
-  const supplied =
-    String(
-      request.headers.get(
-        'X-EMP-Admin-Key'
-      ) || ''
-    ).trim();
+  const supplied = String(
+    request.headers.get('X-EMP-Admin-Key') ||
+    request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '') ||
+    ''
+  ).trim();
 
   return supplied === configured;
 }
 
-async function getTableRows(
-  env,
-  table,
-  includeDeleted = false
-) {
-  if (
-    table === 'bundle_tests'
-  ) {
-    let query =
-      'SELECT * FROM "bundle_tests"';
+async function readTable(env, table, url, request) {
+  if (!TABLES.has(table)) {
+    return bad('Unknown table: ' + table, 404);
+  }
 
-    if (!includeDeleted) {
-      query +=
-        ' WHERE "deleted_at" IS NULL';
+  if (
+    !PUBLIC_TABLES.has(table) &&
+    !ADMIN_READ_TABLES.has(table)
+  ) {
+    if (!adminAllowed(request, env)) {
+      return bad('Unauthorized', 401);
+    }
+  }
+
+  const filters = parseFilters(url);
+  const select = parseSelect(
+    url.searchParams.get('select')
+  );
+  const order = parseOrder(
+    url.searchParams.get('order')
+  );
+
+  let sql = `SELECT * FROM "${table}"`;
+  const binds = [];
+
+  if (filters.length) {
+    const parts = [];
+
+    for (const f of filters) {
+      if (!cleanIdent(f.key)) continue;
+
+      if (f.op === 'eq') {
+        parts.push(`"${f.key}" = ?`);
+        binds.push(f.val);
+      }
+
+      else if (f.op === 'neq') {
+        parts.push(`"${f.key}" != ?`);
+        binds.push(f.val);
+      }
+
+      else if (f.op === 'gt') {
+        parts.push(`"${f.key}" > ?`);
+        binds.push(f.val);
+      }
+
+      else if (f.op === 'gte') {
+        parts.push(`"${f.key}" >= ?`);
+        binds.push(f.val);
+      }
+
+      else if (f.op === 'lt') {
+        parts.push(`"${f.key}" < ?`);
+        binds.push(f.val);
+      }
+
+      else if (f.op === 'lte') {
+        parts.push(`"${f.key}" <= ?`);
+        binds.push(f.val);
+      }
+
+      else if (f.op === 'is') {
+        if (f.val === null) {
+          parts.push(`"${f.key}" IS NULL`);
+        } else {
+          parts.push(`"${f.key}" IS NOT NULL`);
+        }
+      }
+
+      else if (f.op === 'in') {
+        const qs = f.val.map(() => '?').join(',');
+        parts.push(`"${f.key}" IN (${qs})`);
+        binds.push(...f.val);
+      }
+
+      else if (f.op === 'like') {
+        parts.push(`"${f.key}" LIKE ?`);
+        binds.push(String(f.val));
+      }
+
+      else if (f.op === 'ilike') {
+        parts.push(`LOWER("${f.key}") LIKE LOWER(?)`);
+        binds.push(String(f.val));
+      }
     }
 
-    query +=
-      ' ORDER BY "id" ASC';
+    if (parts.length) {
+      sql += ' WHERE ' + parts.join(' AND ');
+    }
+  }
 
-    const result =
-      await env.DB
-        .prepare(query)
-        .all();
+  if (order.length) {
+    sql +=
+      ' ORDER BY ' +
+      order
+        .map(o => `"${o.field}" ${o.dir < 0 ? 'DESC' : 'ASC'}`)
+        .join(', ');
+  }
 
-    return (
-      result.results || []
-    ).map(
-      d1RowToSource
+  const limitRaw = Number(
+    url.searchParams.get('limit')
+  );
+
+  const offsetRaw = Number(
+    url.searchParams.get('offset')
+  );
+
+  if (Number.isFinite(limitRaw) && limitRaw > 0) {
+    sql += ` LIMIT ${Math.min(10000, Math.floor(limitRaw))}`;
+
+    if (Number.isFinite(offsetRaw) && offsetRaw >= 0) {
+      sql += ` OFFSET ${Math.floor(offsetRaw)}`;
+    }
+  }
+
+  const result = await env.DB
+    .prepare(sql)
+    .bind(...binds)
+    .all();
+
+  let rows = result.results || [];
+
+  if (
+    table === 'bundle_tests' &&
+    url.searchParams.get('includeDeleted') !== 'true'
+  ) {
+    rows = rows.filter(
+      r => r.deleted_at == null || r.deleted_at === ''
     );
   }
 
-  const result =
-    await env.DB
-      .prepare(
-        `SELECT * FROM "${table}"`
-      )
-      .all();
+  rows = rows
+    .map(d1RowToSource)
+    .filter(r => rowMatches(r, filters))
+    .map(r => applySelect(r, select));
 
-  return (
-    result.results || []
-  ).map(
-    d1RowToSource
-  );
+  return json(rows);
 }
 
 async function upsertSourceRow(
   env,
   table,
-  src,
-  conflict = null
+  source,
+  conflictField = 'id'
 ) {
-  if (!TABLES.has(table)) {
-    throw new Error(
-      'Unsupported table: ' +
-        table
-    );
-  }
+  const row = sourceRowToD1(table, source);
 
-  let source =
-    src &&
-    typeof src === 'object'
-      ? JSON.parse(
-          JSON.stringify(src)
-        )
-      : {};
+  const existing = await env.DB
+    .prepare(
+      `SELECT * FROM "${table}" WHERE "${conflictField}" = ? LIMIT 1`
+    )
+    .bind(String(source?.[conflictField] ?? row[conflictField]))
+    .first();
 
-  if (
-    table === 'bundle_tests' &&
-    source.id
-  ) {
-    const existing =
-      await env.DB
-        .prepare(
-          'SELECT * FROM "bundle_tests" WHERE "id" = ? LIMIT 1'
-        )
-        .bind(
-          String(source.id)
-        )
-        .first();
-
+  if (existing) {
+    /*
+     * Critical repair:
+     * Access-only / metadata updates must never erase existing HTML.
+     */
     if (
-      existing &&
-      (!source.html_content ||
-        String(
-          source.html_content
-        ).trim() === '')
+      table === 'bundle_tests' &&
+      (!row.html_content ||
+        String(row.html_content).trim() === '')
     ) {
-      const existingSource =
-        d1RowToSource(
-          existing
-        );
+      if (
+        existing.html_content &&
+        String(existing.html_content).trim() !== ''
+      ) {
+        row.html_content = existing.html_content;
+      }
+
+      let oldJson = {};
+
+      try {
+        oldJson = existing.data_json
+          ? JSON.parse(existing.data_json)
+          : {};
+      } catch (_) {}
 
       if (
-        existingSource &&
-        existingSource.html_content
+        oldJson.html_content &&
+        String(oldJson.html_content).trim() !== '' &&
+        (!row.html_content ||
+          String(row.html_content).trim() === '')
       ) {
-        source.html_content =
-          existingSource.html_content;
+        row.html_content = oldJson.html_content;
       }
     }
 
-    if (
-      existing &&
-      !source.updated_at
-    ) {
-      source.updated_at =
-        existing.updated_at ||
-        nowIso();
-    }
+    const fields = Object.keys(row)
+      .filter(k => k !== conflictField)
+      .filter(k => cleanIdent(k));
+
+    const sets = fields
+      .map(k => `"${k}" = ?`)
+      .join(', ');
+
+    const values = fields.map(k => row[k]);
+
+    await env.DB
+      .prepare(
+        `UPDATE "${table}" SET ${sets}
+         WHERE "${conflictField}" = ?`
+      )
+      .bind(
+        ...values,
+        String(source?.[conflictField] ?? row[conflictField])
+      )
+      .run();
+
+    return row;
   }
 
-  const row =
-    sourceRowToD1(
-      table,
-      source
-    );
+  const fields = Object.keys(row)
+    .filter(cleanIdent);
 
-  const columns =
-    Object.keys(row);
+  const placeholders = fields
+    .map(() => '?')
+    .join(',');
 
-  const values =
-    columns.map(
-      key => row[key]
-    );
-
-  let sql;
-
-  if (conflict) {
-    sql = `
-      INSERT INTO "${table}"
-      (${columns
-        .map(c => `"${c}"`)
-        .join(',')})
-      VALUES
-      (${columns
-        .map(() => '?')
-        .join(',')})
-      ON CONFLICT("${conflict}")
-      DO UPDATE SET
-      ${columns
-        .filter(
-          c => c !== conflict
-        )
-        .map(
-          c =>
-            `"${c}" = excluded."${c}"`
-        )
-        .join(',')}
-    `;
-  } else {
-    sql = `
-      INSERT INTO "${table}"
-      (${columns
-        .map(c => `"${c}"`)
-        .join(',')})
-      VALUES
-      (${columns
-        .map(() => '?')
-        .join(',')})
-      ON CONFLICT("id")
-      DO UPDATE SET
-      ${columns
-        .filter(
-          c => c !== 'id'
-        )
-        .map(
-          c =>
-            `"${c}" = excluded."${c}"`
-        )
-        .join(',')}
-    `;
-  }
+  const values = fields.map(k => row[k]);
 
   await env.DB
-    .prepare(sql)
+    .prepare(
+      `INSERT INTO "${table}" (${fields.map(f => `"${f}"`).join(',')})
+       VALUES (${placeholders})`
+    )
     .bind(...values)
     .run();
 
-  const saved =
-    await env.DB
-      .prepare(
-        `SELECT * FROM "${table}" WHERE "id" = ? LIMIT 1`
-      )
-      .bind(
-        String(row.id)
-      )
-      .first();
-
-  return saved
-    ? d1RowToSource(saved)
-    : source;
-}
-
-async function deleteByFilters(
-  env,
-  table,
-  url
-) {
-  const filters =
-    parseFilters(url);
-
-  const rows =
-    await getTableRows(
-      env,
-      table,
-      true
-    );
-
-  const matching =
-    rows.filter(row =>
-      rowMatches(
-        row,
-        filters
-      )
-    );
-
-  if (!matching.length) {
-    return 0;
-  }
-
-  if (
-    table === 'bundle_tests'
-  ) {
-    for (const row of matching) {
-      const updated = {
-        ...row,
-        deleted_at:
-          nowIso(),
-        updated_at:
-          nowIso()
-      };
-
-      await upsertSourceRow(
-        env,
-        table,
-        updated,
-        null
-      );
-    }
-
-    return matching.length;
-  }
-
-  for (const row of matching) {
-    await env.DB
-      .prepare(
-        `DELETE FROM "${table}" WHERE "id" = ?`
-      )
-      .bind(
-        String(row.id)
-      )
-      .run();
-  }
-
-  return matching.length;
+  return row;
 }
 
 async function handleRest(
@@ -1308,380 +855,159 @@ async function handleRest(
   url
 ) {
   if (!TABLES.has(table)) {
-    return bad(
-      'Unknown table: ' +
-        table,
-      404
-    );
+    return bad('Unknown table: ' + table, 404);
   }
 
-  const isPublic =
-    PUBLIC_TABLES.has(table);
-
-  const isAdminRead =
-    ADMIN_READ_TABLES.has(
-      table
-    );
-
-  if (
-    !isPublic &&
-    !isAdminRead &&
-    !adminAllowed(
-      request,
-      env
-    )
-  ) {
-    return bad(
-      'Unauthorized',
-      401
-    );
+  if (request.method === 'GET') {
+    return readTable(env, table, url, request);
   }
 
-  if (
-    isAdminRead &&
-    request.method === 'GET' &&
-    !adminAllowed(
-      request,
-      env
-    )
-  ) {
-    return bad(
-      'Unauthorized',
-      401
-    );
+  if (!adminAllowed(request, env)) {
+    return bad('Unauthorized', 401);
   }
 
-  if (
-    request.method === 'GET'
-  ) {
-    let rows =
-      await getTableRows(
-        env,
-        table,
-        false
-      );
+  let body = null;
 
-    const filters =
-      parseFilters(url);
-
-    rows =
-      rows.filter(row =>
-        rowMatches(
-          row,
-          filters
-        )
-      );
-
-    const order =
-      parseOrder(
-        url.searchParams.get(
-          'order'
-        )
-      );
-
-    if (order.length) {
-      rows.sort((a, b) => {
-        for (const o of order) {
-          const cmp =
-            compareValue(
-              a[o.field],
-              b[o.field]
-            );
-
-          if (cmp !== 0) {
-            return (
-              cmp * o.dir
-            );
-          }
-        }
-
-        return 0;
-      });
-    }
-
-    const offset =
-      Math.max(
-        0,
-        Number(
-          url.searchParams.get(
-            'offset'
-          ) || 0
-        ) || 0
-      );
-
-    const limitRaw =
-      url.searchParams.get(
-        'limit'
-      );
-
-    const limit =
-      limitRaw == null
-        ? rows.length
-        : Math.max(
-            0,
-            Number(limitRaw) || 0
-          );
-
-    rows =
-      rows.slice(
-        offset,
-        offset + limit
-      );
-
-    const select =
-      parseSelect(
-        url.searchParams.get(
-          'select'
-        )
-      );
-
-    rows =
-      rows.map(row =>
-        applySelect(
-          row,
-          select
-        )
-      );
-
-    return json(rows);
+  try {
+    body = await request.json();
+  } catch (_) {
+    body = null;
   }
 
-  if (
-    request.method === 'POST'
-  ) {
-    if (
-      !adminAllowed(
-        request,
-        env
-      )
-    ) {
-      return bad(
-        'Unauthorized',
-        401
-      );
+  if (request.method === 'POST') {
+    if (Array.isArray(body)) {
+      const out = [];
+
+      for (const item of body) {
+        out.push(
+          await upsertSourceRow(env, table, item, 'id')
+        );
+      }
+
+      return json(out);
     }
 
-    let body;
-
-    try {
-      body =
-        await request.json();
-    } catch (_) {
-      return bad(
-        'Invalid JSON body'
-      );
-    }
-
-    const rows =
-      Array.isArray(body)
-        ? body
-        : [body];
-
-    const conflict =
-      url.searchParams.get(
-        'on_conflict'
-      ) || null;
-
-    const out = [];
-
-    for (
-      const src of rows
-    ) {
-      out.push(
-        await upsertSourceRow(
-          env,
-          table,
-          src,
-          conflict
-        )
-      );
-    }
-
-    const prefer =
-      (
-        request.headers.get(
-          'Prefer'
-        ) || ''
-      ).toLowerCase();
-
-    if (
-      prefer.includes(
-        'return=minimal'
-      )
-    ) {
-      return new Response(
-        null,
-        {
-          status: 201,
-          headers:
-            corsHeaders()
-        }
-      );
-    }
-
-    return json(
-      out.map(
-        d1RowToSource
-      ),
-      201
+    const out = await upsertSourceRow(
+      env,
+      table,
+      body || {},
+      'id'
     );
+
+    return json(out);
   }
 
   if (
     request.method === 'PATCH' ||
     request.method === 'PUT'
   ) {
-    if (
-      !adminAllowed(
-        request,
-        env
-      )
-    ) {
+    const filters = parseFilters(url);
+
+    if (!filters.length) {
       return bad(
-        'Unauthorized',
-        401
+        'PATCH/PUT requires at least one filter',
+        400
       );
     }
 
-    let body;
+    const existingResponse =
+      await readTable(env, table, url, request);
 
-    try {
-      body =
-        await request.json();
-    } catch (_) {
-      return bad(
-        'Invalid JSON body'
-      );
+    const existingRows =
+      await existingResponse.json();
+
+    if (!Array.isArray(existingRows)) {
+      return bad('Unable to resolve target rows', 500);
     }
 
-    const filters =
-      parseFilters(url);
+    const updated = [];
 
-    let rows =
-      await getTableRows(
+    for (const old of existingRows) {
+      const merged = {
+        ...old,
+        ...(body || {})
+      };
+
+      const out = await upsertSourceRow(
         env,
         table,
-        true
+        merged,
+        'id'
       );
 
-    rows =
-      rows.filter(row =>
-        rowMatches(
-          row,
-          filters
-        )
-      );
-
-    const out = [];
-
-    for (
-      const row of rows
-    ) {
-      out.push(
-        await upsertSourceRow(
-          env,
-          table,
-          {
-            ...row,
-            ...body
-          },
-          null
-        )
-      );
+      updated.push(out);
     }
 
-    const prefer =
-      (
-        request.headers.get(
-          'Prefer'
-        ) || ''
-      ).toLowerCase();
-
-    if (
-      prefer.includes(
-        'return=minimal'
-      )
-    ) {
-      return new Response(
-        null,
-        {
-          status: 204,
-          headers:
-            corsHeaders()
-        }
-      );
-    }
-
-    return json(
-      out.map(
-        d1RowToSource
-      )
-    );
+    return json(updated);
   }
 
-  if (
-    request.method === 'DELETE'
-  ) {
-    if (
-      !adminAllowed(
-        request,
-        env
-      )
-    ) {
+  if (request.method === 'DELETE') {
+    const filters = parseFilters(url);
+
+    if (!filters.length) {
       return bad(
-        'Unauthorized',
-        401
+        'DELETE requires at least one filter',
+        400
       );
     }
 
-    const count =
-      await deleteByFilters(
-        env,
-        table,
-        url
-      );
+    const existingResponse =
+      await readTable(env, table, url, request);
 
-    return new Response(
-      null,
-      {
-        status: 204,
-        headers:
-          corsHeaders({
-            'X-Deleted-Rows':
-              String(count)
-          })
+    const existingRows =
+      await existingResponse.json();
+
+    for (const row of existingRows) {
+      if (!row.id) continue;
+
+      if (table === 'bundle_tests') {
+        await env.DB
+          .prepare(
+            `UPDATE "bundle_tests"
+             SET deleted_at = ?, updated_at = ?
+             WHERE id = ?`
+          )
+          .bind(
+            nowIso(),
+            nowIso(),
+            String(row.id)
+          )
+          .run();
+      } else {
+        await env.DB
+          .prepare(
+            `DELETE FROM "${table}" WHERE id = ?`
+          )
+          .bind(String(row.id))
+          .run();
       }
-    );
+    }
+
+    return json({
+      success: true,
+      deleted: existingRows.length
+    });
   }
 
-  return bad(
-    'Method not allowed',
-    405
-  );
+  return bad('Method not allowed', 405);
 }
 
-async function sha256Hex(
-  value
-) {
-  const bytes =
-    new TextEncoder().encode(
-      String(value)
-    );
+/* =========================================================
+   ACTIVATION
+   ========================================================= */
 
-  const digest =
-    await crypto.subtle.digest(
-      'SHA-256',
-      bytes
-    );
+async function sha256Hex(value) {
+  const data = new TextEncoder().encode(
+    String(value)
+  );
 
-  return [
-    ...new Uint8Array(digest)
-  ]
-    .map(b =>
-      b
-        .toString(16)
-        .padStart(2, '0')
-    )
+  const hash = await crypto.subtle.digest(
+    'SHA-256',
+    data
+  );
+
+  return [...new Uint8Array(hash)]
+    .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 }
 
@@ -1692,177 +1018,119 @@ async function handleRedeemActivation(
   let body;
 
   try {
-    body =
-      await request.json();
+    body = await request.json();
   } catch (_) {
-    return bad(
-      'Invalid JSON body'
-    );
+    return bad('Invalid JSON body');
   }
 
-  const code =
-    String(
-      body.p_code || ''
-    ).trim();
+  const code = String(
+    body.code || ''
+  ).trim();
 
-  const bundleId =
-    String(
-      body.p_bundle_id ?? ''
-    ).trim();
+  const userKey = String(
+    body.user_key ||
+    body.userKey ||
+    ''
+  ).trim();
 
-  const userKey =
-    String(
-      body.p_user_key || ''
-    ).trim();
+  const bundleId = String(
+    body.bundle_id ||
+    body.bundleId ||
+    ''
+  ).trim();
 
-  if (
-    !code ||
-    !bundleId ||
-    !userKey
-  ) {
+  if (!code || !userKey || !bundleId) {
     return bad(
-      'p_code, p_bundle_id and p_user_key are required',
+      'code, user_key and bundle_id are required',
       400
     );
   }
 
-  let codeRow =
-    await env.DB
+  const hash = await sha256Hex(code);
+
+  let codeRow = await env.DB
+    .prepare(
+      `SELECT * FROM "activation_codes"
+       WHERE "code" = ?
+       LIMIT 1`
+    )
+    .bind(hash)
+    .first();
+
+  if (!codeRow) {
+    codeRow = await env.DB
       .prepare(
-        'SELECT * FROM "activation_codes" WHERE "code" = ? LIMIT 1'
+        `SELECT * FROM "activation_codes"
+         WHERE "code" = ?
+         LIMIT 1`
       )
       .bind(code)
       .first();
-
-  if (!codeRow) {
-    const hash =
-      await sha256Hex(code);
-
-    codeRow =
-      await env.DB
-        .prepare(
-          'SELECT * FROM "activation_codes" WHERE "code" = ? LIMIT 1'
-        )
-        .bind(hash)
-        .first();
   }
 
   if (!codeRow) {
-    return json({
-      status: 'invalid'
-    });
+    return bad('Invalid activation code', 404);
   }
-
-  const activation =
-    d1RowToSource(
-      codeRow
-    );
 
   if (
-    String(
-      activation.bundle_id
-    ) !== bundleId
+    String(codeRow.status || '').toLowerCase() !==
+    'unused'
   ) {
-    return json({
-      status:
-        'wrong_bundle',
-      bundle_id:
-        String(
-          activation.bundle_id ||
-            ''
-        )
-    });
+    if (
+      String(codeRow.redeemed_by || '') === userKey &&
+      String(codeRow.bundle_id || '') === bundleId
+    ) {
+      return json({
+        success: true,
+        already_owned: true,
+        bundle_id: bundleId
+      });
+    }
+
+    return bad('Activation code already used', 409);
   }
 
-  const status =
-    String(
-      activation.status ||
-        ''
-    ).toLowerCase();
-
-  if (
-    status === 'used' ||
-    activation.redeemed_by
-  ) {
-    return json({
-      status: 'used',
-      bundle_id:
-        bundleId
-    });
-  }
-
-  const existing =
-    await env.DB
-      .prepare(
-        'SELECT 1 FROM "entitlements" WHERE "user_key" = ? AND "bundle_id" = ? LIMIT 1'
-      )
-      .bind(
-        userKey,
-        bundleId
-      )
-      .first();
-
-  if (existing) {
-    return json({
-      status:
-        'already_owned',
-      bundle_id:
-        bundleId
-    });
-  }
-
-  const now =
-    nowIso();
-
-  await env.DB
+  const claimed = await env.DB
     .prepare(
-      'UPDATE "activation_codes" SET "status" = ?, "redeemed_by" = ?, "redeemed_at" = ?, "data_json" = ? WHERE "id" = ?'
+      `UPDATE "activation_codes"
+       SET status = 'redeemed',
+           redeemed_by = ?,
+           redeemed_at = ?
+       WHERE id = ?
+         AND status = 'unused'`
     )
     .bind(
-      'used',
       userKey,
-      now,
-      JSON.stringify({
-        ...activation,
-        status: 'used',
-        redeemed_by:
-          userKey,
-        redeemed_at:
-          now
-      }),
-      String(
-        codeRow.id
-      )
+      nowIso(),
+      String(codeRow.id)
     )
     .run();
 
-  const ent = {
-    id:
-      crypto.randomUUID(),
-
-    user_key:
-      userKey,
-
-    bundle_id:
-      bundleId,
-
-    created_at:
-      now
-  };
+  if (
+    Number(claimed.meta?.changes || 0) !== 1
+  ) {
+    return bad(
+      'Activation code was already redeemed',
+      409
+    );
+  }
 
   await upsertSourceRow(
     env,
     'entitlements',
-    ent,
-    null
+    {
+      id: crypto.randomUUID(),
+      user_key: userKey,
+      bundle_id: bundleId,
+      created_at: nowIso()
+    },
+    'id'
   );
 
   return json({
-    status: 'success',
-    bundle_id:
-      bundleId,
-    user_key:
-      userKey
+    success: true,
+    bundle_id: bundleId,
+    lifetime: true
   });
 }
 
@@ -1870,172 +1138,200 @@ async function handleGetBundleEntitlements(
   request,
   env
 ) {
-  let body = {};
+  let body;
 
   try {
-    body =
-      await request.json();
-  } catch (_) {}
-
-  const userKey =
-    String(
-      body.p_user_key ||
-        body.user_key ||
-        ''
-    ).trim();
-
-  if (!userKey) {
-    return json([]);
+    body = await request.json();
+  } catch (_) {
+    return bad('Invalid JSON body');
   }
 
-  const rows =
-    await env.DB
-      .prepare(
-        'SELECT * FROM "entitlements" WHERE "user_key" = ? ORDER BY "created_at" DESC'
-      )
-      .bind(userKey)
-      .all();
+  const userKey = String(
+    body.user_key ||
+    body.userKey ||
+    ''
+  ).trim();
 
-  return json(
-    (rows.results || [])
-      .map(
-        d1RowToSource
-      )
-  );
+  if (!userKey) {
+    return bad(
+      'user_key is required',
+      400
+    );
+  }
+
+  const rows = await env.DB
+    .prepare(
+      `SELECT * FROM "entitlements"
+       WHERE "user_key" = ?`
+    )
+    .bind(userKey)
+    .all();
+
+  return json({
+    success: true,
+    entitlements:
+      (rows.results || []).map(d1RowToSource)
+  });
 }
 
-async function handleImportJson(
+/* =========================================================
+   ANALYTICS
+   ========================================================= */
+
+async function handleAnalyticsEvent(
   request,
   env
 ) {
-  if (
-    !adminAllowed(
-      request,
-      env
-    )
-  ) {
+  let body;
+
+  try {
+    body = await request.json();
+  } catch (_) {
+    return bad('Invalid JSON body');
+  }
+
+  if (!body.user_id) {
+    return bad(
+      'user_id is required',
+      400
+    );
+  }
+
+  const row = {
+    ...body,
+    id:
+      body.id ||
+      crypto.randomUUID(),
+
+    occurred_at:
+      body.occurred_at ||
+      nowIso()
+  };
+
+  await upsertSourceRow(
+    env,
+    'emp_analytics_events',
+    row,
+    'id'
+  );
+
+  return json({
+    success: true
+  });
+}
+
+/*
+ * IMPORTANT:
+ * Clear Analytics is deliberately separate from
+ * student local history.
+ *
+ * It clears:
+ *   1. emp_analytics_events
+ *   2. emp_test_submissions
+ *
+ * It does NOT touch:
+ *   - bundles
+ *   - bundle_tests
+ *   - entitlements
+ *   - student local IndexedDB/history
+ */
+
+async function handleAdminAnalyticsClear(
+  request,
+  env
+) {
+  if (!adminAllowed(request, env)) {
     return bad(
       'Unauthorized',
       401
     );
   }
 
-  let body;
+  let analyticsDeleted = 0;
+  let rankingDeleted = 0;
 
   try {
-    body =
-      await request.json();
-  } catch (_) {
+    const result =
+      await env.DB
+        .prepare(
+          `DELETE FROM "emp_analytics_events"`
+        )
+        .run();
+
+    analyticsDeleted =
+      Number(
+        result.meta?.changes || 0
+      );
+  } catch (e) {
+    console.error(
+      'Analytics clear failed:',
+      e
+    );
+
     return bad(
-      'Invalid JSON body'
+      'Could not clear analytics events: ' +
+      String(e?.message || e),
+      500
     );
   }
 
-  const table =
-    String(
-      body.table || ''
-    ).trim();
+  try {
+    const result =
+      await env.DB
+        .prepare(
+          `DELETE FROM "emp_test_submissions"`
+        )
+        .run();
 
-  const rows =
-    Array.isArray(body.rows)
-      ? body.rows
-      : [];
+    rankingDeleted =
+      Number(
+        result.meta?.changes || 0
+      );
+  } catch (e) {
+    console.error(
+      'Ranking clear failed:',
+      e
+    );
 
-  if (
-    !table ||
-    !rows.length
-  ) {
-    return json({
-      received:
-        rows.length,
-
-      written: 0,
-
-      bundle_tests_written:
-        0
-    });
-  }
-
-  let target = table;
-
-  if (
-    target === 'tests'
-  ) {
-    target =
-      'bundle_tests';
-  }
-
-  if (
-    !TABLES.has(target)
-  ) {
     return bad(
-      'Unsupported import table: ' +
-        target,
-      400
+      'Analytics cleared but ranking submissions could not be cleared: ' +
+      String(e?.message || e),
+      500
     );
-  }
-
-  let written = 0;
-
-  for (
-    const row of rows
-  ) {
-    await upsertSourceRow(
-      env,
-      target,
-      row,
-      null
-    );
-
-    written++;
   }
 
   return json({
-    received:
-      rows.length,
+    success: true,
 
-    written,
+    analytics_deleted:
+      analyticsDeleted,
 
-    bundle_tests_written:
-      target ===
-      'bundle_tests'
-        ? written
-        : 0
+    ranking_submissions_deleted:
+      rankingDeleted,
+
+    message:
+      'Analytics and ranking submissions cleared. Student local history is untouched.'
   });
 }
 
-/*
- * =========================================================
- * BUNDLE LIKES
- * =========================================================
- */
+/* =========================================================
+   BUNDLE LIKES
+   ========================================================= */
 
 async function handleBundleLikeCounts(
   request,
   env,
   url
 ) {
-  const raw =
-    String(
-      url.searchParams.get(
-        'bundle_ids'
-      ) ||
-        url.searchParams.get(
-          'bundle_id'
-        ) ||
-        ''
-    ).trim();
+  const rawIds =
+    url.searchParams.get('bundle_ids') ||
+    url.searchParams.get('ids') ||
+    '';
 
-  const ids = [
-    ...new Set(
-      raw
-        .split(',')
-        .map(x =>
-          String(x).trim()
-        )
-        .filter(Boolean)
-    )
-  ].slice(0, 200);
+  const ids = rawIds
+    .split(',')
+    .map(x => String(x).trim())
+    .filter(Boolean);
 
   if (!ids.length) {
     return json({
@@ -2045,41 +1341,21 @@ async function handleBundleLikeCounts(
   }
 
   const placeholders =
-    ids
-      .map(() => '?')
-      .join(',');
+    ids.map(() => '?').join(',');
 
   let rows = [];
 
   try {
     const q = `
       SELECT
-        json_extract(
-          data_json,
-          '$.bundle_id'
-        ) AS bundle_id,
-
-        COUNT(
-          DISTINCT user_id
-        ) AS like_count
-
-      FROM
-        "emp_analytics_events"
-
-      WHERE
-        event_type =
-        'bundle_like'
-
-      AND json_extract(
-        data_json,
-        '$.bundle_id'
-      ) IN (${placeholders})
-
+        json_extract(data_json,'$.bundle_id') AS bundle_id,
+        COUNT(DISTINCT user_id) AS like_count
+      FROM "emp_analytics_events"
+      WHERE event_type = 'bundle_like'
+        AND json_extract(data_json,'$.bundle_id')
+            IN (${placeholders})
       GROUP BY
-        json_extract(
-          data_json,
-          '$.bundle_id'
-        )
+        json_extract(data_json,'$.bundle_id')
     `;
 
     const result =
@@ -2104,15 +1380,11 @@ async function handleBundleLikeCounts(
 
   const counts = {};
 
-  for (
-    const id of ids
-  ) {
+  for (const id of ids) {
     counts[id] = 0;
   }
 
-  for (
-    const row of rows
-  ) {
+  for (const row of rows) {
     const id =
       String(
         row.bundle_id ?? ''
@@ -2120,9 +1392,7 @@ async function handleBundleLikeCounts(
 
     if (id) {
       counts[id] =
-        Number(
-          row.like_count
-        ) || 0;
+        Number(row.like_count) || 0;
     }
   }
 
@@ -2132,57 +1402,9 @@ async function handleBundleLikeCounts(
   });
 }
 
-async function handleAnalyticsEvent(
-  request,
-  env
-) {
-  let body;
-
-  try {
-    body =
-      await request.json();
-  } catch (_) {
-    return bad(
-      'Invalid JSON body'
-    );
-  }
-
-  if (!body.user_id) {
-    return bad(
-      'user_id is required',
-      400
-    );
-  }
-
-  const row = {
-    ...body,
-
-    id:
-      body.id ||
-      crypto.randomUUID(),
-
-    occurred_at:
-      body.occurred_at ||
-      nowIso()
-  };
-
-  await upsertSourceRow(
-    env,
-    'emp_analytics_events',
-    row,
-    null
-  );
-
-  return json({
-    success: true
-  });
-}
-
-/*
- * =========================================================
- * RANKING
- * =========================================================
- */
+/* =========================================================
+   RANKING
+   ========================================================= */
 
 function rankNumber(v) {
   const n = Number(v);
@@ -2197,72 +1419,67 @@ function buildLeaderboard(
   userId,
   attemptId
 ) {
-  const clean =
-    rows
-      .map(d1RowToSource)
-      .filter(
-        r =>
-          String(
-            r.status ||
-              'completed'
-          ).toLowerCase() ===
-          'completed'
-      )
-      .map(r => ({
+  const clean = rows
+    .map(d1RowToSource)
+
+    .filter(
+      r =>
+        String(
+          r.status || 'completed'
+        ).toLowerCase() ===
+        'completed'
+    )
+
+    .map(r => {
+      const correct =
+        rankNumber(r.correct);
+
+      const wrong =
+        rankNumber(r.wrong);
+
+      let accuracy;
+
+      if (
+        r.accuracy != null &&
+        Number.isFinite(
+          Number(r.accuracy)
+        )
+      ) {
+        accuracy =
+          Number(r.accuracy);
+      } else {
+        accuracy =
+          correct + wrong > 0
+            ? Number(
+                (
+                  correct /
+                  (correct + wrong) *
+                  100
+                ).toFixed(2)
+              )
+            : 0;
+      }
+
+      return {
         ...r,
 
         score:
           rankNumber(
             r.score ??
-              r.marks
+            r.marks
           ),
 
         total_marks:
           rankNumber(
             r.total_marks ??
-              r.total_questions
+            r.total_questions
           ),
 
-        accuracy:
-          Number.isFinite(
-            Number(
-              r.accuracy
-            )
-          )
-            ? Number(
-                r.accuracy
-              )
-            : (() => {
-                const c =
-                  rankNumber(
-                    r.correct
-                  );
+        accuracy,
 
-                const w =
-                  rankNumber(
-                    r.wrong
-                  );
+        correct,
 
-                return c + w > 0
-                  ? Number(
-                      (
-                        (c /
-                          (c + w)) *
-                        100
-                      ).toFixed(2)
-                    )
-                  : 0;
-              })(),
-
-        correct:
-          rankNumber(
-            r.correct
-          ),
-
-        wrong:
-          rankNumber(
-            r.wrong
-          ),
+        wrong,
 
         skipped:
           rankNumber(
@@ -2272,72 +1489,66 @@ function buildLeaderboard(
         time_taken:
           rankNumber(
             r.time_taken ??
-              r.time_seconds ??
-              r.timeTaken
+            r.time_seconds ??
+            r.timeTaken
           ),
 
         attempt_id:
           r.attempt_id ||
           r.id
-      }));
+      };
+    });
 
   /*
-   * Compare two attempts:
-   * 1. Higher score wins
-   * 2. Higher accuracy wins
-   * 3. Lower time wins
-   * 4. Stable attempt_id tie breaker
+   * Ranking priority:
+   *
+   * 1. ACTUAL SUBMITTED SCORE
+   * 2. ACTUAL SUBMITTED ACCURACY
+   * 3. TIME TAKEN
+   *
+   * Percentile is calculated only AFTER rank.
    */
+
   const better = (a, b) => {
-    const ds =
+    const scoreDiff =
       Number(a.score || 0) -
       Number(b.score || 0);
 
-    if (ds) {
-      return ds > 0;
+    if (scoreDiff !== 0) {
+      return scoreDiff > 0;
     }
 
-    const da =
+    const accuracyDiff =
       Number(a.accuracy || 0) -
       Number(b.accuracy || 0);
 
-    if (da) {
-      return da > 0;
+    if (accuracyDiff !== 0) {
+      return accuracyDiff > 0;
     }
 
-    const dt =
-      Number(
-        b.time_taken ||
-          1e9
-      ) -
-      Number(
-        a.time_taken ||
-          1e9
-      );
+    const timeA =
+      Number(a.time_taken || 1e9);
 
-    if (dt) {
-      return dt > 0;
+    const timeB =
+      Number(b.time_taken || 1e9);
+
+    if (timeA !== timeB) {
+      return timeA < timeB;
     }
 
-    return (
-      String(
-        a.attempt_id || ''
-      ) <
-      String(
-        b.attempt_id || ''
-      )
+    return String(
+      a.attempt_id || ''
+    ) < String(
+      b.attempt_id || ''
     );
   };
 
   /*
-   * One ranking entry per student.
+   * One best entry per user.
    */
-  const best =
-    new Map();
+  const best = new Map();
 
-  for (
-    const row of clean
-  ) {
+  for (const row of clean) {
     const key =
       String(
         row.user_id || ''
@@ -2360,13 +1571,10 @@ function buildLeaderboard(
   }
 
   /*
-   * IMPORTANT:
-   * If the user opened ranking for a specific
-   * attempt, preserve that exact attempt.
-   *
-   * This prevents the leaderboard from replacing
-   * the user's selected attempt with another
-   * historical attempt.
+   * If a specific attempt is requested,
+   * preserve that exact submitted attempt
+   * so YOU always represents the attempt
+   * being viewed.
    */
   const selected =
     attemptId
@@ -2375,9 +1583,7 @@ function buildLeaderboard(
             String(
               r.attempt_id
             ) ===
-            String(
-              attemptId
-            )
+            String(attemptId)
         )
       : null;
 
@@ -2393,23 +1599,16 @@ function buildLeaderboard(
     );
   }
 
-  /*
-   * Sort:
-   * Higher score first
-   * Higher accuracy second
-   * Lower time third
-   */
   const list =
-    [
-      ...best.values()
-    ].sort(
-      (a, b) =>
-        better(a, b)
-          ? -1
-          : better(b, a)
-          ? 1
-          : 0
-    );
+    [...best.values()]
+      .sort(
+        (a, b) =>
+          better(a, b)
+            ? -1
+            : better(b, a)
+              ? 1
+              : 0
+      );
 
   const n =
     list.length;
@@ -2418,125 +1617,100 @@ function buildLeaderboard(
   let lastRank = 0;
 
   const leaderboard =
-    list.map(
-      (r, i) => {
-        const key =
-          Number(
-            r.score || 0
-          ) +
-          '|' +
-          Number(
-            r.accuracy || 0
-          ).toFixed(4) +
-          '|' +
-          Number(
-            r.time_taken || 0
-          );
+    list.map((r, i) => {
+      const key =
+        Number(r.score || 0) +
+        '|' +
+        Number(
+          r.accuracy || 0
+        ).toFixed(4) +
+        '|' +
+        Number(
+          r.time_taken || 0
+        );
 
-        /*
-         * Equal score + accuracy + time
-         * receives the same rank.
-         */
-        const rank =
-          key === lastKey
-            ? lastRank
-            : i + 1;
+      const rank =
+        key === lastKey
+          ? lastRank
+          : i + 1;
 
-        lastKey = key;
-        lastRank = rank;
+      lastKey = key;
+      lastRank = rank;
 
-        return {
-          rank,
+      return {
+        rank,
 
-          user_id:
-            r.user_id,
+        user_id:
+          r.user_id,
 
-          username:
-            r.username ||
-            'User',
+        username:
+          r.username ||
+          'User',
 
-          score:
-            rankNumber(
-              r.score
-            ),
+        score:
+          rankNumber(
+            r.score
+          ),
 
-          total_marks:
-            rankNumber(
-              r.total_marks
-            ),
+        total_marks:
+          rankNumber(
+            r.total_marks
+          ),
 
-          accuracy:
-            rankNumber(
-              r.accuracy
-            ),
+        accuracy:
+          rankNumber(
+            r.accuracy
+          ),
 
-          correct:
-            rankNumber(
-              r.correct
-            ),
+        correct:
+          rankNumber(
+            r.correct
+          ),
 
-          wrong:
-            rankNumber(
-              r.wrong
-            ),
+        wrong:
+          rankNumber(
+            r.wrong
+          ),
 
-          skipped:
-            rankNumber(
-              r.skipped
-            ),
+        skipped:
+          rankNumber(
+            r.skipped
+          ),
 
-          time_taken:
-            rankNumber(
-              r.time_taken
-            ),
+        time_taken:
+          rankNumber(
+            r.time_taken
+          ),
 
-          attempt_id:
-            r.attempt_id,
+        attempt_id:
+          r.attempt_id,
 
-          test_id:
-            r.test_id,
+        test_id:
+          r.test_id,
 
-          completed_at:
-            r.completed_at ||
-            r.created_at,
+        completed_at:
+          r.completed_at ||
+          r.created_at,
 
-          /*
-           * This is what the HTML uses to show
-           * YOU on the leaderboard.
-           */
-          is_you:
-            (
-              attemptId &&
-              String(
-                r.attempt_id
-              ) ===
-              String(
-                attemptId
-              )
-            ) ||
-            (
-              !attemptId &&
-              userId &&
-              String(
-                r.user_id
-              ) ===
-              String(
-                userId
-              )
-            )
-        };
-      }
-    );
+        is_you:
+          (
+            attemptId &&
+            String(
+              r.attempt_id
+            ) ===
+            String(attemptId)
+          ) ||
+          (
+            !attemptId &&
+            userId &&
+            String(
+              r.user_id
+            ) ===
+            String(userId)
+          )
+      };
+    });
 
-  /*
-   * Find current user's exact row.
-   *
-   * First priority:
-   * exact attempt_id
-   *
-   * Second priority:
-   * user_id
-   */
   const me =
     leaderboard.find(
       r =>
@@ -2544,20 +1718,18 @@ function buildLeaderboard(
         String(
           r.attempt_id
         ) ===
-        String(
-          attemptId
-        )
+        String(attemptId)
     ) ||
+
     leaderboard.find(
       r =>
         userId &&
         String(
           r.user_id
         ) ===
-        String(
-          userId
-        )
+        String(userId)
     ) ||
+
     null;
 
   if (me) {
@@ -2565,53 +1737,39 @@ function buildLeaderboard(
   }
 
   /*
-   * Percentile:
+   * Percentile is OUTPUT of ranking.
    *
-   * 1 participant = 100
+   * #1 / 4 = 100
+   * #2 / 4 = 66.67
+   * #3 / 4 = 33.33
+   * #4 / 4 = 0
    *
-   * Otherwise:
-   * ((participants - rank) /
-   *  (participants - 1)) * 100
+   * This is the standard relative-rank style.
    */
+  for (const r of leaderboard) {
+    r.percentile =
+      n <= 1
+        ? 100
+        : Number(
+            (
+              ((n - r.rank) /
+                (n - 1)) *
+              100
+            ).toFixed(2)
+          );
+  }
+
   if (me) {
     me.percentile =
       n <= 1
         ? 100
         : Number(
             (
-              (
-                (n -
-                  me.rank) /
-                (n - 1)
-              ) *
+              ((n - me.rank) /
+                (n - 1)) *
               100
             ).toFixed(2)
           );
-  }
-
-  /*
-   * Give every leaderboard row its percentile.
-   */
-  for (
-    const r of leaderboard
-  ) {
-    if (
-      r.percentile == null
-    ) {
-      r.percentile =
-        n <= 1
-          ? 100
-          : Number(
-              (
-                (
-                  (n -
-                    r.rank) /
-                  (n - 1)
-                ) *
-                100
-              ).toFixed(2)
-            );
-    }
   }
 
   return {
@@ -2636,6 +1794,10 @@ function buildLeaderboard(
         : null
   };
 }
+
+/* =========================================================
+   RANK SUBMIT
+   ========================================================= */
 
 async function handleRankSubmit(
   request,
@@ -2680,6 +1842,9 @@ async function handleRankSubmit(
 
     created_at:
       body.created_at ||
+      nowIso(),
+
+    updated_at:
       nowIso()
   };
 
@@ -2692,11 +1857,149 @@ async function handleRankSubmit(
 
   return json({
     success: true,
-
-    source:
-      'cloudflare_d1'
+    source: 'cloudflare_d1',
+    participant_added: true,
+    attempt_id:
+      String(
+        body.attempt_id
+      )
   });
 }
+
+/* =========================================================
+   ADMIN RANK -> LOAD TESTS
+   ========================================================= */
+
+async function handleRankTests(
+  request,
+  env
+) {
+  if (!adminAllowed(request, env)) {
+    return bad(
+      'Unauthorized',
+      401
+    );
+  }
+
+  const rows =
+    await env.DB
+      .prepare(`
+        SELECT
+          test_id,
+          MAX(test_name) AS test_name,
+          COUNT(*) AS attempts,
+          COUNT(DISTINCT user_id) AS participants,
+          MAX(completed_at) AS latest_completed_at
+        FROM "emp_test_submissions"
+        WHERE "status" = 'completed'
+          AND test_id IS NOT NULL
+          AND TRIM(CAST(test_id AS TEXT)) <> ''
+        GROUP BY test_id
+        ORDER BY latest_completed_at DESC
+      `)
+      .all();
+
+  return json({
+    success: true,
+
+    tests:
+      (rows.results || [])
+        .map(r => ({
+          test_id:
+            String(
+              r.test_id
+            ),
+
+          test_name:
+            r.test_name ||
+            'Untitled test',
+
+          attempts:
+            Number(
+              r.attempts || 0
+            ),
+
+          participants:
+            Number(
+              r.participants || 0
+            ),
+
+          latest_completed_at:
+            r.latest_completed_at ||
+            null
+        }))
+  });
+}
+
+/* =========================================================
+   ADMIN RANK -> LOAD PARTICIPANTS FOR ONE TEST
+   ========================================================= */
+
+async function handleRankParticipants(
+  request,
+  env,
+  url
+) {
+  if (!adminAllowed(request, env)) {
+    return bad(
+      'Unauthorized',
+      401
+    );
+  }
+
+  const testId =
+    String(
+      url.searchParams.get(
+        'test_id'
+      ) || ''
+    ).trim();
+
+  if (!testId) {
+    return bad(
+      'test_id is required',
+      400
+    );
+  }
+
+  const rows =
+    await env.DB
+      .prepare(`
+        SELECT *
+        FROM "emp_test_submissions"
+        WHERE "test_id" = ?
+          AND "status" = 'completed'
+        ORDER BY completed_at DESC
+      `)
+      .bind(testId)
+      .all();
+
+  const sourceRows =
+    rows.results || [];
+
+  const result =
+    buildLeaderboard(
+      sourceRows,
+      '',
+      ''
+    );
+
+  return json({
+    success: true,
+
+    test_id:
+      testId,
+
+    participants:
+      result.participants,
+
+    leaderboard:
+      result.leaderboard
+  });
+}
+
+/* =========================================================
+   RANK LEADERBOARD
+   ========================================================= */
 
 async function handleRankLeaderboard(
   request,
@@ -2733,13 +2036,13 @@ async function handleRankLeaderboard(
 
   const rows =
     await env.DB
-      .prepare(
-        'SELECT * FROM "emp_test_submissions" WHERE "test_id" = ? AND "status" = ?'
-      )
-      .bind(
-        testId,
-        'completed'
-      )
+      .prepare(`
+        SELECT *
+        FROM "emp_test_submissions"
+        WHERE "test_id" = ?
+          AND "status" = 'completed'
+      `)
+      .bind(testId)
       .all();
 
   return json(
@@ -2750,6 +2053,89 @@ async function handleRankLeaderboard(
     )
   );
 }
+
+/* =========================================================
+   IMPORT JSON
+   ========================================================= */
+
+async function handleImportJson(
+  request,
+  env
+) {
+  if (!adminAllowed(request, env)) {
+    return bad(
+      'Unauthorized',
+      401
+    );
+  }
+
+  let body;
+
+  try {
+    body =
+      await request.json();
+  } catch (_) {
+    return bad(
+      'Invalid JSON body'
+    );
+  }
+
+  if (!body || typeof body !== 'object') {
+    return bad(
+      'Invalid import payload'
+    );
+  }
+
+  const results = [];
+
+  for (const [table, rows] of Object.entries(body)) {
+    if (!TABLES.has(table)) continue;
+    if (!Array.isArray(rows)) continue;
+
+    for (const item of rows) {
+      try {
+        const out =
+          await upsertSourceRow(
+            env,
+            table,
+            item,
+            'id'
+          );
+
+        results.push({
+          table,
+          id:
+            out.id,
+          success:
+            true
+        });
+      } catch (e) {
+        results.push({
+          table,
+          id:
+            item?.id ??
+            null,
+          success:
+            false,
+          error:
+            String(
+              e?.message ||
+              e
+            )
+        });
+      }
+    }
+  }
+
+  return json({
+    success: true,
+    results
+  });
+}
+
+/* =========================================================
+   ROUTER
+   ========================================================= */
 
 async function route(
   request,
@@ -2775,9 +2161,6 @@ async function route(
   }
 
   try {
-    /*
-     * JSON IMPORT
-     */
     if (
       url.pathname ===
       '/api/import/json'
@@ -2788,9 +2171,6 @@ async function route(
       );
     }
 
-    /*
-     * BUNDLE LIKE COUNTS
-     */
     if (
       url.pathname ===
       '/api/bundle/like-counts'
@@ -2802,9 +2182,6 @@ async function route(
       );
     }
 
-    /*
-     * ANALYTICS EVENT
-     */
     if (
       url.pathname ===
       '/api/analytics/event'
@@ -2815,9 +2192,37 @@ async function route(
       );
     }
 
-    /*
-     * RANK SUBMIT
-     */
+    if (
+      url.pathname ===
+      '/api/admin/analytics/clear'
+    ) {
+      return await handleAdminAnalyticsClear(
+        request,
+        env
+      );
+    }
+
+    if (
+      url.pathname ===
+      '/api/rank/tests'
+    ) {
+      return await handleRankTests(
+        request,
+        env
+      );
+    }
+
+    if (
+      url.pathname ===
+      '/api/rank/participants'
+    ) {
+      return await handleRankParticipants(
+        request,
+        env,
+        url
+      );
+    }
+
     if (
       url.pathname ===
       '/api/rank/submit'
@@ -2828,9 +2233,6 @@ async function route(
       );
     }
 
-    /*
-     * RANK LEADERBOARD
-     */
     if (
       url.pathname ===
       '/api/rank/leaderboard'
@@ -2842,9 +2244,6 @@ async function route(
       );
     }
 
-    /*
-     * ACTIVATION RPC
-     */
     if (
       url.pathname ===
       '/rest/v1/rpc/redeem_activation_code'
@@ -2855,9 +2254,6 @@ async function route(
       );
     }
 
-    /*
-     * ENTITLEMENTS RPC
-     */
     if (
       url.pathname ===
       '/rest/v1/rpc/get_bundle_entitlements'
@@ -2868,9 +2264,6 @@ async function route(
       );
     }
 
-    /*
-     * REST API
-     */
     if (
       url.pathname.startsWith(
         '/rest/v1/'
@@ -2905,21 +2298,17 @@ async function route(
       );
     }
 
-    /*
-     * HEALTH CHECK
-     */
     if (
       url.pathname === '/' ||
       url.pathname === '/health'
     ) {
       return json({
         ok: true,
-
         service:
           'ExamMaster Pro Cloudflare Worker',
 
         version:
-          'V5.160-RANKING-YOU-FIXED',
+          'V5.161-ANALYTICS-RANK-ADMIN-FIX',
 
         time:
           nowIso()
@@ -2930,6 +2319,7 @@ async function route(
       'Not found',
       404
     );
+
   } catch (e) {
     console.error(
       'Worker error:',
@@ -2939,13 +2329,17 @@ async function route(
     return bad(
       String(
         e?.message ||
-          e ||
-          'Internal Worker error'
+        e ||
+        'Internal Worker error'
       ),
       500
     );
   }
 }
+
+/* =========================================================
+   EXPORT
+   ========================================================= */
 
 export default {
   async fetch(
