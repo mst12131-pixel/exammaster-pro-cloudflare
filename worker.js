@@ -1,17 +1,6 @@
 /*
  * ExamMaster Pro - Cloudflare Worker / D1
- * ACCESS + PUBLISH SYNC FIX
- *
- * Fixes:
- * 1. bundle_tests access state is authoritative and cannot be turned FREE by
- *    a stale data_json snapshot.
- * 2. FREE / PAID / price / access_mode / access_type / access_override / is_paid
- *    are kept synchronized with data_json.
- * 3. Access-only test updates never erase existing html_content.
- * 4. Public Test Mode can read published metadata, while admin writes remain
- *    protected when ADMIN_API_KEY is configured.
- * 5. Includes the REST compatibility layer used by the ExamMaster HTML app.
- * 6. Includes activation entitlement RPCs, analytics and ranking endpoints.
+ * V5.142 — HTML RECOVERY + ACCESS/PUBLISH SYNC FIX
  */
 
 const TABLES = new Set([
@@ -57,9 +46,7 @@ function text(
 ) {
   return new Response(body, {
     status,
-    headers: corsHeaders({
-      'Content-Type': contentType
-    })
+    headers: corsHeaders({ 'Content-Type': contentType })
   });
 }
 
@@ -102,9 +89,7 @@ function parseFilters(url) {
         'columns',
         'apikey'
       ].includes(key)
-    ) {
-      continue;
-    }
+    ) continue;
 
     if (key === 'or' || key === 'and') continue;
 
@@ -133,11 +118,7 @@ function parseFilters(url) {
       val = decodeFilterValue(val);
     }
 
-    filters.push({
-      key,
-      op,
-      val
-    });
+    filters.push({ key, op, val });
   }
 
   return filters;
@@ -202,12 +183,8 @@ function rowMatches(row, filters) {
         return compareValue(actual, val) <= 0;
 
       case 'in':
-        return (
-          Array.isArray(val) &&
-          val.some(
-            x => String(actual ?? '') === String(x)
-          )
-        );
+        return Array.isArray(val) &&
+          val.some(x => String(actual ?? '') === String(x));
 
       case 'is':
         return val === null
@@ -215,9 +192,8 @@ function rowMatches(row, filters) {
           : Boolean(actual) === Boolean(val);
 
       case 'like':
-        return String(actual ?? '').includes(
-          String(val).replace(/%/g, '')
-        );
+        return String(actual ?? '')
+          .includes(String(val).replace(/%/g, ''));
 
       case 'ilike':
         return String(actual ?? '')
@@ -274,8 +250,9 @@ function parseOrder(raw) {
     .filter(x => x.field);
 }
 
+
 /* ============================================================
-   ACCESS CONTROL
+   ACCESS / PAYMENT NORMALIZATION
    ============================================================ */
 
 function normalizeAccessState(source) {
@@ -288,9 +265,7 @@ function normalizeAccessState(source) {
     s.access_mode,
     s.access_override,
     s.access_type
-  ].map(v =>
-    String(v ?? '').toLowerCase()
-  );
+  ].map(v => String(v ?? '').toLowerCase());
 
   if (
     values.includes('paid') ||
@@ -324,24 +299,17 @@ function normalizeTestAccess(source) {
 
   return {
     state,
-
     access_mode: state,
-
     access_override: state,
-
     access_type: state,
-
     is_paid: state === 'paid',
-
     price:
       state === 'paid'
-        ? Math.max(
-            0,
-            Number(s.price || 0) || 0
-          )
+        ? Math.max(0, Number(s.price || 0) || 0)
         : 0
   };
 }
+
 
 /* ============================================================
    SOURCE -> D1
@@ -370,10 +338,8 @@ function sourceRowToD1(table, source) {
       description: src.description ?? null,
       icon: src.icon ?? null,
       color: src.color ?? null,
-      created_at:
-        src.created_at ?? nowIso(),
-      updated_at:
-        src.updated_at ?? nowIso()
+      created_at: src.created_at ?? nowIso(),
+      updated_at: src.updated_at ?? nowIso()
     });
 
   } else if (table === 'notes') {
@@ -385,70 +351,35 @@ function sourceRowToD1(table, source) {
           : null,
 
       title: src.title ?? null,
-
       content: src.content ?? null,
-
-      file_data:
-        src.file_data ?? null,
-
-      file_name:
-        src.file_name ?? null,
-
-      file_type:
-        src.file_type ?? null,
-
-      created_at:
-        src.created_at ?? nowIso(),
-
-      updated_at:
-        src.updated_at ?? nowIso()
+      file_data: src.file_data ?? null,
+      file_name: src.file_name ?? null,
+      file_type: src.file_type ?? null,
+      created_at: src.created_at ?? nowIso(),
+      updated_at: src.updated_at ?? nowIso()
     });
 
   } else if (table === 'bundles') {
 
     Object.assign(common, {
-      name:
-        src.name ?? 'Untitled Bundle',
-
-      description:
-        src.description ?? null,
-
-      updated_at:
-        src.updated_at ?? nowIso()
+      name: src.name ?? 'Untitled Bundle',
+      description: src.description ?? null,
+      updated_at: src.updated_at ?? nowIso()
     });
 
   } else if (table === 'bundle_tests') {
 
-    /*
-     * IMPORTANT:
-     * Access fields are normalized FIRST.
-     *
-     * This prevents stale data_json from changing
-     * a PAID test back to FREE.
-     */
-
     const a = normalizeTestAccess(src);
 
-    src.access_mode =
-      a.access_mode;
+    src.access_mode = a.access_mode;
+    src.access_override = a.access_override;
+    src.access_type = a.access_type;
+    src.is_paid = a.is_paid;
+    src.price = a.price;
 
-    src.access_override =
-      a.access_override;
-
-    src.access_type =
-      a.access_type;
-
-    src.is_paid =
-      a.is_paid;
-
-    src.price =
-      a.price;
-
-    common.data_json =
-      JSON.stringify(src);
+    common.data_json = JSON.stringify(src);
 
     Object.assign(common, {
-
       bundle_id:
         src.bundle_id != null
           ? String(src.bundle_id)
@@ -477,10 +408,6 @@ function sourceRowToD1(table, source) {
       time_limit:
         src.time_limit ?? null,
 
-      /*
-       * NEVER remove existing HTML when this
-       * is only an access/price update.
-       */
       html_content:
         src.html_content ?? null,
 
@@ -512,44 +439,23 @@ function sourceRowToD1(table, source) {
   } else if (table === 'banners') {
 
     Object.assign(common, {
-      title:
-        src.title ?? null,
-
-      description:
-        src.description ?? null,
-
-      price:
-        src.price ?? null,
-
-      image:
-        src.image ?? null,
-
-      qrData:
-        src.qrData ?? null,
-
-      link_type:
-        src.link_type ?? null,
-
-      link:
-        src.link ?? null,
+      title: src.title ?? null,
+      description: src.description ?? null,
+      price: src.price ?? null,
+      image: src.image ?? null,
+      qrData: src.qrData ?? null,
+      link_type: src.link_type ?? null,
+      link: src.link ?? null,
 
       bundle_id:
-        src.bundle_id == null ||
-        src.bundle_id === ''
+        src.bundle_id == null || src.bundle_id === ''
           ? null
           : String(src.bundle_id),
 
-      subject_id:
-        src.subject_id ?? null,
-
-      test_id:
-        src.test_id ?? null,
-
-      slide_seconds:
-        src.slide_seconds ?? null,
-
-      updated_at:
-        src.updated_at ?? nowIso()
+      subject_id: src.subject_id ?? null,
+      test_id: src.test_id ?? null,
+      slide_seconds: src.slide_seconds ?? null,
+      updated_at: src.updated_at ?? nowIso()
     });
 
   } else if (table === 'activation_codes') {
@@ -596,9 +502,7 @@ function sourceRowToD1(table, source) {
         src.created_at ?? nowIso()
     });
 
-  } else if (
-    table === 'emp_test_submissions'
-  ) {
+  } else if (table === 'emp_test_submissions') {
 
     Object.assign(common, {
       attempt_id:
@@ -622,44 +526,37 @@ function sourceRowToD1(table, source) {
           ? String(src.bundle_id)
           : null,
 
+      subject_id:
+        src.subject_id != null
+          ? String(src.subject_id)
+          : null,
+
+      test_name:
+        src.test_name ?? null,
+
       score:
-        src.score ?? 0,
+        src.score ?? null,
 
       total_marks:
-        src.total_marks ?? 0,
+        src.total_marks ?? null,
 
       accuracy:
-        src.accuracy ?? 0,
+        src.accuracy ?? null,
 
-      correct:
-        src.correct ?? 0,
-
-      wrong:
-        src.wrong ?? 0,
-
-      skipped:
-        src.skipped ?? 0,
-
-      time_taken:
-        src.time_taken ??
-        src.time_seconds ??
-        0,
+      percentile:
+        src.percentile ?? null,
 
       status:
-        src.status ?? 'completed',
+        src.status ?? null,
 
       completed_at:
-        src.completed_at ??
-        nowIso(),
+        src.completed_at ?? null,
 
       created_at:
-        src.created_at ??
-        nowIso()
+        src.created_at ?? nowIso()
     });
 
-  } else if (
-    table === 'emp_analytics_events'
-  ) {
+  } else if (table === 'emp_analytics_events') {
 
     Object.assign(common, {
       user_id:
@@ -667,36 +564,24 @@ function sourceRowToD1(table, source) {
           ? String(src.user_id)
           : null,
 
-      event_name:
-        src.event_name ??
-        src.event ??
-        null,
+      username:
+        src.username ?? null,
 
-      test_id:
-        src.test_id != null
-          ? String(src.test_id)
-          : null,
-
-      bundle_id:
-        src.bundle_id != null
-          ? String(src.bundle_id)
-          : null,
+      event_type:
+        src.event_type ?? null,
 
       occurred_at:
-        src.occurred_at ??
-        nowIso()
+        src.occurred_at ?? nowIso()
     });
 
-  } else if (
-    table === 'content_notifications'
-  ) {
+  } else if (table === 'content_notifications') {
 
     Object.assign(common, {
       title:
         src.title ?? null,
 
-      message:
-        src.message ?? null,
+      description:
+        src.description ?? null,
 
       content_type:
         src.content_type ?? null,
@@ -707,13 +592,10 @@ function sourceRowToD1(table, source) {
           : String(src.content_id),
 
       created_at:
-        src.created_at ??
-        nowIso()
+        src.created_at ?? nowIso()
     });
 
-  } else if (
-    table === 'admin_users'
-  ) {
+  } else if (table === 'admin_users') {
 
     Object.assign(common, {
       user_id:
@@ -723,48 +605,35 @@ function sourceRowToD1(table, source) {
         src.email ?? null,
 
       created_at:
-        src.created_at ??
-        nowIso()
+        src.created_at ?? nowIso()
     });
 
-  } else if (
-    table === 'app_releases'
-  ) {
+  } else if (table === 'app_releases') {
 
     Object.assign(common, {
       release_id:
-        String(
-          src.release_id ??
-          src.id
-        ),
+        String(src.release_id ?? id),
 
       release_path:
-        src.release_path ??
-        null,
+        src.release_path ?? null,
 
       release_url:
-        src.release_url ??
-        null,
+        src.release_url ?? null,
 
       published_at:
-        src.published_at ??
-        nowIso(),
+        src.published_at ?? nowIso(),
 
       size_bytes:
-        src.size_bytes ??
-        null,
+        src.size_bytes ?? null,
 
       content_hash:
-        src.content_hash ??
-        null,
+        src.content_hash ?? null,
 
       active:
         src.active ? 1 : 0
     });
 
-  } else if (
-    table === 'cf_users'
-  ) {
+  } else if (table === 'cf_users') {
 
     Object.assign(common, {
       email:
@@ -777,25 +646,24 @@ function sourceRowToD1(table, source) {
         src.role ?? 'user',
 
       created_at:
-        src.created_at ??
-        nowIso()
+        src.created_at ?? nowIso()
     });
   }
 
   return common;
 }
 
+
 /* ============================================================
    D1 -> SOURCE
    ============================================================ */
 
 function d1RowToSource(row) {
+
   let data = {};
 
   try {
-    data = JSON.parse(
-      row.data_json || '{}'
-    );
+    data = JSON.parse(row.data_json || '{}');
   } catch (_) {}
 
   const base = {
@@ -805,77 +673,68 @@ function d1RowToSource(row) {
   delete base.data_json;
 
   /*
-   * IMPORTANT:
-   * For bundle_tests, typed D1 access columns are
-   * authoritative over stale data_json.
+   * V5.142 HTML RECOVERY FIX
+   *
+   * If typed html_content is empty but data_json.html_content exists,
+   * recover the actual HTML from data_json.
+   */
+
+  const out = {
+    ...data,
+    ...base
+  };
+
+  const typedHtml =
+    String(row.html_content ?? '').trim();
+
+  const jsonHtml =
+    String(data.html_content ?? '').trim();
+
+  if (!typedHtml && jsonHtml) {
+    out.html_content = data.html_content;
+  }
+
+  /*
+   * ACCESS/PAYMENT FIELDS
    */
 
   if (
-    String(
-      row?.bundle_id ?? ''
-    ) !== '' &&
-    (
-      'access_mode' in row ||
-      'access_type' in row ||
-      'access_override' in row ||
-      'is_paid' in row ||
-      'price' in row
-    )
+    String(row.bundle_id ?? '') !== '' &&
+    Object.prototype.hasOwnProperty.call(out, 'name')
   ) {
-    const merged = {
-      ...data,
-      ...base
-    };
 
-    if (
-      row.access_mode != null &&
-      row.access_mode !== ''
-    ) {
-      merged.access_mode =
-        row.access_mode;
-    }
+    const mergedAccess =
+      normalizeTestAccess({
+        ...data,
+        ...row
+      });
 
-    if (
-      row.access_type != null &&
-      row.access_type !== ''
-    ) {
-      merged.access_type =
-        row.access_type;
-    }
+    out.access_mode =
+      mergedAccess.access_mode;
 
-    if (
-      row.access_override != null &&
-      row.access_override !== ''
-    ) {
-      merged.access_override =
-        row.access_override;
-    }
+    out.access_override =
+      mergedAccess.access_override;
 
-    if (row.is_paid != null) {
-      merged.is_paid =
-        Number(row.is_paid) === 1 ||
-        row.is_paid === true;
-    }
+    out.access_type =
+      mergedAccess.access_type;
 
-    if (row.price != null) {
-      merged.price =
-        Number(row.price) || 0;
-    }
+    out.is_paid =
+      mergedAccess.is_paid;
 
-    return merged;
+    out.price =
+      mergedAccess.price;
   }
 
-  return {
-    ...base,
-    ...data
-  };
+  return out;
 }
+
 
 /* ============================================================
    TABLE COLUMNS
    ============================================================ */
 
 function tableColumns(table) {
+
   const map = {
 
     subjects: [
@@ -976,13 +835,12 @@ function tableColumns(table) {
       'username',
       'test_id',
       'bundle_id',
+      'subject_id',
+      'test_name',
       'score',
       'total_marks',
       'accuracy',
-      'correct',
-      'wrong',
-      'skipped',
-      'time_taken',
+      'percentile',
       'status',
       'completed_at',
       'created_at',
@@ -992,18 +850,16 @@ function tableColumns(table) {
     emp_analytics_events: [
       'id',
       'user_id',
-      'event_name',
-      'test_id',
-      'bundle_id',
+      'username',
+      'event_type',
       'occurred_at',
-      'created_at',
       'data_json'
     ],
 
     content_notifications: [
       'id',
       'title',
-      'message',
+      'description',
       'content_type',
       'content_id',
       'created_at',
@@ -1013,8 +869,7 @@ function tableColumns(table) {
     admin_users: [
       'user_id',
       'email',
-      'created_at',
-      'data_json'
+      'created_at'
     ],
 
     app_releases: [
@@ -1041,66 +896,34 @@ function tableColumns(table) {
   return map[table] || [];
 }
 
+
 /* ============================================================
    UNIQUE KEY
    ============================================================ */
 
-function uniqueKey(
-  table,
-  src,
-  conflict
-) {
-  if (conflict) {
-    const first =
-      String(conflict)
-        .split(',')
-        .map(x => x.trim())
-        .find(Boolean);
-
-    if (first) {
-      return {
-        field: first,
-        value: String(
-          src[first] ?? ''
-        )
-      };
-    }
-  }
+function uniqueKey(table, src, conflict) {
 
   if (
-    table ===
-    'emp_test_submissions'
+    conflict &&
+    src[conflict] != null
   ) {
     return {
-      field: 'attempt_id',
-      value: String(
-        src.attempt_id ??
-        src.id
-      )
+      field: conflict,
+      value: String(src[conflict])
     };
   }
 
-  if (
-    table === 'admin_users'
-  ) {
+  if (table === 'admin_users') {
     return {
       field: 'user_id',
-      value: String(
-        src.user_id ??
-        src.id
-      )
+      value: String(src.user_id ?? src.id)
     };
   }
 
-  if (
-    table === 'app_releases'
-  ) {
+  if (table === 'app_releases') {
     return {
       field: 'release_id',
-      value: String(
-        src.release_id ??
-        src.id
-      )
+      value: String(src.release_id ?? src.id)
     };
   }
 
@@ -1110,36 +933,26 @@ function uniqueKey(
   };
 }
 
+
 /* ============================================================
    ADMIN AUTH
    ============================================================ */
 
-function adminAllowed(
-  request,
-  env
-) {
-  /*
-   * If no ADMIN_API_KEY is configured,
-   * preserve existing deployment behavior.
-   */
+function adminAllowed(request, env) {
+
   if (!env.ADMIN_API_KEY) {
     return true;
   }
 
   const supplied =
-    request.headers.get(
-      'X-EMP-Admin-Key'
-    ) ||
+    request.headers.get('X-EMP-Admin-Key') ||
     request.headers
       .get('Authorization')
-      ?.replace(
-        /^Bearer\s+/i,
-        ''
-      );
+      ?.replace(/^Bearer\s+/i, '');
 
-  return supplied ===
-    env.ADMIN_API_KEY;
+  return supplied === env.ADMIN_API_KEY;
 }
+
 
 /* ============================================================
    READ TABLE
@@ -1151,13 +964,12 @@ async function readTable(
   url,
   options = {}
 ) {
-  const cols =
-    tableColumns(table);
+
+  const cols = tableColumns(table);
 
   if (!cols.length) {
     throw new Error(
-      'Unsupported table: ' +
-      table
+      'Unsupported table: ' + table
     );
   }
 
@@ -1165,10 +977,9 @@ async function readTable(
     await env.DB
       .prepare(
         `SELECT ${cols
-          .map(
-            c => '"' + c + '"'
-          )
-          .join(',')} FROM "${table}"`
+          .map(c => '"' + c + '"')
+          .join(',')}
+         FROM "${table}"`
       )
       .all();
 
@@ -1176,47 +987,42 @@ async function readTable(
     (rows.results || [])
       .map(d1RowToSource);
 
+  const filters =
+    parseFilters(url);
+
+  out =
+    out.filter(r =>
+      rowMatches(r, filters)
+    );
+
   /*
-   * Deleted tests are not shown publicly.
-   * Admin can request includeDeleted=true.
+   * Never expose deleted tests as normal
+   * published content.
    */
 
   if (
     table === 'bundle_tests' &&
-    !options.includeDeleted
+    !options.includeDeleted &&
+    !url.searchParams.has('deleted_at')
   ) {
-    out = out.filter(
-      r =>
-        !r.deleted_at
-    );
+    out =
+      out.filter(r =>
+        !String(r.deleted_at || '').trim()
+      );
   }
-
-  const filters =
-    parseFilters(url);
-
-  out = out.filter(
-    r =>
-      rowMatches(
-        r,
-        filters
-      )
-  );
 
   const orders =
     parseOrder(
-      url.searchParams.get(
-        'order'
-      )
+      url.searchParams.get('order')
     );
 
   for (
-    let i =
-      orders.length - 1;
+    let i = orders.length - 1;
     i >= 0;
     i--
   ) {
-    const o =
-      orders[i];
+
+    const o = orders[i];
 
     out.sort(
       (a, b) =>
@@ -1232,56 +1038,44 @@ async function readTable(
     Math.max(
       0,
       Number(
-        url.searchParams.get(
-          'offset'
-        ) || 0
+        url.searchParams.get('offset') || 0
       ) || 0
     );
 
   const limitRaw =
-    url.searchParams.get(
-      'limit'
-    );
+    url.searchParams.get('limit');
 
-  if (
-    limitRaw != null
-  ) {
+  if (limitRaw != null) {
+
     out =
       out.slice(
         offset,
         offset +
           Math.max(
             0,
-            Number(
-              limitRaw
-            ) || 0
+            Number(limitRaw) || 0
           )
       );
-  } else if (
-    offset
-  ) {
+
+  } else if (offset) {
+
     out =
       out.slice(offset);
   }
 
-  const fields =
-    parseSelect(
-      url.searchParams.get(
-        'select'
+  return out.map(r =>
+    applySelect(
+      r,
+      parseSelect(
+        url.searchParams.get('select')
       )
-    );
-
-  return out.map(
-    r =>
-      applySelect(
-        r,
-        fields
-      )
+    )
   );
 }
 
+
 /* ============================================================
-   UPSERT SOURCE ROW
+   UPSERT
    ============================================================ */
 
 async function upsertSourceRow(
@@ -1290,19 +1084,6 @@ async function upsertSourceRow(
   src,
   conflict
 ) {
-  const d =
-    sourceRowToD1(
-      table,
-      src
-    );
-
-  const cols =
-    tableColumns(table)
-      .filter(
-        c =>
-          c !==
-          'data_json'
-      );
 
   const key =
     uniqueKey(
@@ -1311,112 +1092,135 @@ async function upsertSourceRow(
       conflict
     );
 
-  /*
-   * Check whether existing row exists.
-   */
-
-  const existing =
+  const existingRow =
     await env.DB
       .prepare(
         `SELECT * FROM "${table}"
          WHERE "${key.field}" = ?
          LIMIT 1`
       )
-      .bind(
-        key.value
-      )
+      .bind(key.value)
       .first();
 
+  let mergedSrc =
+    src &&
+    typeof src === 'object'
+      ? JSON.parse(JSON.stringify(src))
+      : {};
+
   /*
-   * SPECIAL PROTECTION:
-   *
-   * If Admin sends an access-only update and
-   * html_content is missing/null, preserve the
-   * existing HTML content.
+   * IMPORTANT:
+   * Access-only publish may not send HTML.
+   * Never erase existing HTML.
    */
 
   if (
     table === 'bundle_tests' &&
-    existing
+    existingRow &&
+    !String(
+      mergedSrc.html_content || ''
+    ).trim()
   ) {
-    const incomingHtml =
-      src.html_content;
 
     if (
-      incomingHtml == null ||
-      incomingHtml === ''
+      String(
+        existingRow.html_content || ''
+      ).trim()
     ) {
-      const existingSource =
-        d1RowToSource(
-          existing
-        );
 
-      if (
-        existingSource.html_content
-      ) {
-        d.html_content =
-          existingSource.html_content;
+      mergedSrc.html_content =
+        existingRow.html_content;
 
-        let snapshot = {};
+    } else {
 
-        try {
-          snapshot =
-            JSON.parse(
-              d.data_json ||
-              '{}'
-            );
-        } catch (_) {
-          snapshot = {};
+      try {
+
+        const oldData =
+          JSON.parse(
+            existingRow.data_json || '{}'
+          );
+
+        if (
+          String(
+            oldData.html_content || ''
+          ).trim()
+        ) {
+
+          mergedSrc.html_content =
+            oldData.html_content;
         }
 
-        snapshot.html_content =
-          existingSource.html_content;
+      } catch (_) {}
+    }
+  }
 
-        d.data_json =
-          JSON.stringify(
-            snapshot
-          );
+  /*
+   * Preserve existing explicit access state
+   * when incoming payload omits it.
+   */
+
+  if (
+    table === 'bundle_tests' &&
+    existingRow
+  ) {
+
+    const old =
+      d1RowToSource(existingRow);
+
+    for (
+      const k of [
+        'access_mode',
+        'access_override',
+        'access_type',
+        'is_paid',
+        'price'
+      ]
+    ) {
+
+      if (
+        mergedSrc[k] == null ||
+        mergedSrc[k] === ''
+      ) {
+
+        mergedSrc[k] = old[k];
       }
     }
   }
 
-  const values =
-    cols.map(
-      c =>
-        d[c] ??
-        null
+  const d =
+    sourceRowToD1(
+      table,
+      mergedSrc
     );
 
-  if (existing) {
+  const cols =
+    tableColumns(table)
+      .filter(c => c !== 'data_json');
 
-    /*
-     * EXISTING ROW
-     *
-     * Update normal columns and data_json.
-     */
+  const values =
+    cols.map(
+      c => d[c] ?? null
+    );
+
+  if (existingRow) {
 
     const updateCols =
       cols.filter(
-        c =>
-          c !==
-          key.field
+        c => c !== key.field
       );
 
     const setParts =
       updateCols.map(
-        c =>
-          `"${c}" = ?`
+        c => `"${c}" = ?`
       );
 
     setParts.push(
-      `"data_json" = ?`
+      '"data_json" = ?'
     );
 
     const updateValues = [
       ...updateCols.map(
-        c =>
-          d[c] ??
-          null
+        c => d[c] ?? null
       ),
       d.data_json
     ];
@@ -1435,10 +1239,6 @@ async function upsertSourceRow(
 
   } else {
 
-    /*
-     * NEW ROW
-     */
-
     const allCols = [
       ...cols,
       'data_json'
@@ -1446,35 +1246,27 @@ async function upsertSourceRow(
 
     const placeholders =
       allCols
-        .map(
-          () => '?'
-        )
+        .map(() => '?')
         .join(', ');
-
-    const insertValues = [
-      ...values,
-      d.data_json
-    ];
 
     await env.DB
       .prepare(
         `INSERT INTO "${table}"
          (${allCols
-           .map(
-             c =>
-               '"' + c + '"'
-           )
+           .map(c => '"' + c + '"')
            .join(', ')})
          VALUES (${placeholders})`
       )
       .bind(
-        ...insertValues
+        ...values,
+        d.data_json
       )
       .run();
   }
 
   return d;
 }
+
 
 /* ============================================================
    DELETE
@@ -1485,41 +1277,29 @@ async function deleteByFilters(
   table,
   url
 ) {
+
   const rows =
     await readTable(
       env,
       table,
       url,
       {
-        includeDeleted:
-          true
+        includeDeleted: true
       }
     );
 
-  if (!rows.length) {
-    return 0;
-  }
-
   let n = 0;
 
-  for (
-    const row of rows
-  ) {
+  for (const row of rows) {
+
     const key =
-      table ===
-      'admin_users'
+      table === 'admin_users'
         ? 'user_id'
-        : table ===
-          'app_releases'
+        : table === 'app_releases'
           ? 'release_id'
           : 'id';
 
-    const val =
-      row[key];
-
-    if (
-      val == null
-    ) {
+    if (row[key] == null) {
       continue;
     }
 
@@ -1530,21 +1310,21 @@ async function deleteByFilters(
            WHERE "${key}" = ?`
         )
         .bind(
-          String(val)
+          String(row[key])
         )
         .run();
 
     n += Number(
-      r.meta?.changes ||
-      0
+      r.meta?.changes || 0
     );
   }
 
   return n;
 }
 
+
 /* ============================================================
-   REST COMPATIBILITY API
+   REST
    ============================================================ */
 
 async function handleRest(
@@ -1553,12 +1333,10 @@ async function handleRest(
   table,
   url
 ) {
-  if (
-    !TABLES.has(table)
-  ) {
+
+  if (!TABLES.has(table)) {
     return bad(
-      'Table not found: ' +
-      table,
+      'Table not found: ' + table,
       404
     );
   }
@@ -1566,57 +1344,41 @@ async function handleRest(
   const method =
     request.method;
 
-  const isWrite = [
-    'POST',
-    'PATCH',
-    'PUT',
-    'DELETE'
-  ].includes(
-    method
-  );
-
-  /*
-   * User-side writes allowed only for:
-   * - submissions
-   * - analytics
-   * - entitlements
-   */
+  const isWrite =
+    [
+      'POST',
+      'PATCH',
+      'PUT',
+      'DELETE'
+    ].includes(method);
 
   if (
     isWrite &&
-    !adminAllowed(
-      request,
-      env
-    ) &&
+    !adminAllowed(request, env) &&
     ![
       'emp_test_submissions',
       'emp_analytics_events',
       'entitlements'
     ].includes(table)
   ) {
+
     return bad(
       'Unauthorized',
       401
     );
   }
 
-  if (
-    method === 'GET'
-  ) {
+  /*
+   * GET
+   */
 
-    /*
-     * Sensitive admin tables remain protected.
-     */
+  if (method === 'GET') {
 
     if (
-      ADMIN_READ_TABLES.has(
-        table
-      ) &&
-      !adminAllowed(
-        request,
-        env
-      )
+      ADMIN_READ_TABLES.has(table) &&
+      !adminAllowed(request, env)
     ) {
+
       return bad(
         'Unauthorized',
         401
@@ -1631,6 +1393,10 @@ async function handleRest(
       )
     );
   }
+
+  /*
+   * POST / PUT
+   */
 
   if (
     method === 'POST' ||
@@ -1663,6 +1429,7 @@ async function handleRest(
     for (
       const src of rows
     ) {
+
       out.push(
         await upsertSourceRow(
           env,
@@ -1685,27 +1452,27 @@ async function handleRest(
         'return=minimal'
       )
     ) {
+
       return new Response(
         null,
         {
           status: 201,
-          headers:
-            corsHeaders()
+          headers: corsHeaders()
         }
       );
     }
 
     return json(
-      out.map(
-        d1RowToSource
-      ),
+      out.map(d1RowToSource),
       201
     );
   }
 
-  if (
-    method === 'PATCH'
-  ) {
+  /*
+   * PATCH
+   */
+
+  if (method === 'PATCH') {
 
     let body;
 
@@ -1724,14 +1491,11 @@ async function handleRest(
         table,
         url,
         {
-          includeDeleted:
-            true
+          includeDeleted: true
         }
       );
 
-    if (
-      !rows.length
-    ) {
+    if (!rows.length) {
       return json([]);
     }
 
@@ -1741,44 +1505,14 @@ async function handleRest(
       const row of rows
     ) {
 
-      /*
-       * Merge existing row + patch.
-       *
-       * This is important because Admin may PATCH
-       * only access fields without sending html_content.
-       */
-
-      const merged =
-        Object.assign(
-          {},
-          row,
-          body
-        );
-
-      /*
-       * Explicitly preserve HTML for bundle_tests
-       * when patch does not contain HTML.
-       */
-
-      if (
-        table ===
-        'bundle_tests' &&
-        (
-          body.html_content ==
-            null ||
-          body.html_content === ''
-        ) &&
-        row.html_content
-      ) {
-        merged.html_content =
-          row.html_content;
-      }
-
       out.push(
         await upsertSourceRow(
           env,
           table,
-          merged,
+          {
+            ...row,
+            ...body
+          },
           null
         )
       );
@@ -1796,26 +1530,26 @@ async function handleRest(
         'return=minimal'
       )
     ) {
+
       return new Response(
         null,
         {
           status: 204,
-          headers:
-            corsHeaders()
+          headers: corsHeaders()
         }
       );
     }
 
     return json(
-      out.map(
-        d1RowToSource
-      )
+      out.map(d1RowToSource)
     );
   }
 
-  if (
-    method === 'DELETE'
-  ) {
+  /*
+   * DELETE
+   */
+
+  if (method === 'DELETE') {
 
     if (
       !adminAllowed(
@@ -1823,6 +1557,7 @@ async function handleRest(
         env
       )
     ) {
+
       return bad(
         'Unauthorized',
         401
@@ -1840,11 +1575,10 @@ async function handleRest(
       null,
       {
         status: 204,
-        headers:
-          corsHeaders({
-            'X-Deleted-Rows':
-              String(count)
-          })
+        headers: corsHeaders({
+          'X-Deleted-Rows':
+            String(count)
+        })
       }
     );
   }
@@ -1855,13 +1589,13 @@ async function handleRest(
   );
 }
 
+
 /* ============================================================
-   SHA256
+   HASH
    ============================================================ */
 
-async function sha256Hex(
-  value
-) {
+async function sha256Hex(value) {
+
   const bytes =
     new TextEncoder().encode(
       String(value)
@@ -1874,21 +1608,16 @@ async function sha256Hex(
     );
 
   return [
-    ...new Uint8Array(
-      digest
-    )
+    ...new Uint8Array(digest)
   ]
     .map(
       b =>
-        b
-          .toString(16)
-          .padStart(
-            2,
-            '0'
-          )
+        b.toString(16)
+          .padStart(2, '0')
     )
     .join('');
 }
+
 
 /* ============================================================
    ACTIVATION CODE
@@ -1898,7 +1627,8 @@ async function handleRedeemActivation(
   request,
   env
 ) {
-  let body;
+
+  let body = {};
 
   try {
     body =
@@ -1929,6 +1659,7 @@ async function handleRedeemActivation(
     !bundleId ||
     !userKey
   ) {
+
     return bad(
       'p_code, p_bundle_id and p_user_key are required',
       400
@@ -1938,20 +1669,14 @@ async function handleRedeemActivation(
   const codeRow =
     await env.DB
       .prepare(
-        `SELECT *
-         FROM "activation_codes"
-         WHERE "code" = ?
-         LIMIT 1`
+        'SELECT * FROM "activation_codes" WHERE "code" = ? LIMIT 1'
       )
-      .bind(
-        code
-      )
+      .bind(code)
       .first();
 
   if (!codeRow) {
     return json({
-      status:
-        'invalid'
+      status: 'invalid'
     });
   }
 
@@ -1965,43 +1690,36 @@ async function handleRedeemActivation(
       activation.bundle_id
     ) !== bundleId
   ) {
+
     return json({
-      status:
-        'wrong_bundle',
+      status: 'wrong_bundle',
       bundle_id:
         String(
-          activation.bundle_id ||
-          ''
+          activation.bundle_id || ''
         )
     });
   }
 
   const status =
     String(
-      activation.status ||
-      ''
+      activation.status || ''
     ).toLowerCase();
 
   if (
     status === 'used' ||
     activation.redeemed_by
   ) {
+
     return json({
-      status:
-        'used',
-      bundle_id:
-        bundleId
+      status: 'used',
+      bundle_id: bundleId
     });
   }
 
   const existing =
     await env.DB
       .prepare(
-        `SELECT 1
-         FROM "entitlements"
-         WHERE "user_key" = ?
-         AND "bundle_id" = ?
-         LIMIT 1`
+        'SELECT 1 FROM "entitlements" WHERE "user_key" = ? AND "bundle_id" = ? LIMIT 1'
       )
       .bind(
         userKey,
@@ -2010,11 +1728,10 @@ async function handleRedeemActivation(
       .first();
 
   if (existing) {
+
     return json({
-      status:
-        'already_owned',
-      bundle_id:
-        bundleId
+      status: 'already_owned',
+      bundle_id: bundleId
     });
   }
 
@@ -2023,12 +1740,7 @@ async function handleRedeemActivation(
 
   await env.DB
     .prepare(
-      `UPDATE "activation_codes"
-       SET "status" = ?,
-           "redeemed_by" = ?,
-           "redeemed_at" = ?,
-           "data_json" = ?
-       WHERE "id" = ?`
+      'UPDATE "activation_codes" SET "status" = ?, "redeemed_by" = ?, "redeemed_at" = ?, "data_json" = ? WHERE "id" = ?'
     )
     .bind(
       'used',
@@ -2036,16 +1748,11 @@ async function handleRedeemActivation(
       now,
       JSON.stringify({
         ...activation,
-        status:
-          'used',
-        redeemed_by:
-          userKey,
-        redeemed_at:
-          now
+        status: 'used',
+        redeemed_by: userKey,
+        redeemed_at: now
       }),
-      String(
-        codeRow.id
-      )
+      String(codeRow.id)
     )
     .run();
 
@@ -2071,23 +1778,22 @@ async function handleRedeemActivation(
   );
 
   return json({
-    status:
-      'success',
-    bundle_id:
-      bundleId,
-    user_key:
-      userKey
+    status: 'success',
+    bundle_id: bundleId,
+    user_key: userKey
   });
 }
 
+
 /* ============================================================
-   GET ENTITLEMENTS
+   ENTITLEMENTS
    ============================================================ */
 
 async function handleGetBundleEntitlements(
   request,
   env
 ) {
+
   let body = {};
 
   try {
@@ -2109,38 +1815,34 @@ async function handleGetBundleEntitlements(
   const rows =
     await env.DB
       .prepare(
-        `SELECT *
-         FROM "entitlements"
-         WHERE "user_key" = ?
-         ORDER BY "created_at" DESC`
+        'SELECT * FROM "entitlements" WHERE "user_key" = ? ORDER BY "created_at" DESC'
       )
-      .bind(
-        userKey
-      )
+      .bind(userKey)
       .all();
 
   return json(
     (rows.results || [])
-      .map(
-        d1RowToSource
-      )
+      .map(d1RowToSource)
   );
 }
 
+
 /* ============================================================
-   JSON IMPORT
+   IMPORT JSON
    ============================================================ */
 
 async function handleImportJson(
   request,
   env
 ) {
+
   if (
     !adminAllowed(
       request,
       env
     )
   ) {
+
     return bad(
       'Unauthorized',
       401
@@ -2164,9 +1866,7 @@ async function handleImportJson(
     ).trim();
 
   const rows =
-    Array.isArray(
-      body.rows
-    )
+    Array.isArray(body.rows)
       ? body.rows
       : [];
 
@@ -2174,13 +1874,11 @@ async function handleImportJson(
     !table ||
     !rows.length
   ) {
+
     return json({
-      received:
-        rows.length,
-      written:
-        0,
-      bundle_tests_written:
-        0
+      received: rows.length,
+      written: 0,
+      bundle_tests_written: 0
     });
   }
 
@@ -2195,10 +1893,9 @@ async function handleImportJson(
   }
 
   if (
-    !TABLES.has(
-      target
-    )
+    !TABLES.has(target)
   ) {
+
     return bad(
       'Unsupported import table: ' +
       target,
@@ -2206,12 +1903,12 @@ async function handleImportJson(
     );
   }
 
-  let written =
-    0;
+  let written = 0;
 
   for (
     const row of rows
   ) {
+
     await upsertSourceRow(
       env,
       target,
@@ -2223,18 +1920,15 @@ async function handleImportJson(
   }
 
   return json({
-    received:
-      rows.length,
-
+    received: rows.length,
     written,
-
     bundle_tests_written:
-      target ===
-      'bundle_tests'
+      target === 'bundle_tests'
         ? written
         : 0
   });
 }
+
 
 /* ============================================================
    ANALYTICS
@@ -2244,6 +1938,7 @@ async function handleAnalyticsEvent(
   request,
   env
 ) {
+
   let body;
 
   try {
@@ -2255,9 +1950,8 @@ async function handleAnalyticsEvent(
     );
   }
 
-  if (
-    !body.user_id
-  ) {
+  if (!body.user_id) {
+
     return bad(
       'user_id is required',
       400
@@ -2284,22 +1978,21 @@ async function handleAnalyticsEvent(
   );
 
   return json({
-    success:
-      true
+    success: true
   });
 }
+
 
 /* ============================================================
    RANKING
    ============================================================ */
 
 function rankNumber(v) {
+
   const n =
     Number(v);
 
-  return Number.isFinite(
-    n
-  )
+  return Number.isFinite(n)
     ? n
     : 0;
 }
@@ -2309,11 +2002,10 @@ function buildLeaderboard(
   userId,
   attemptId
 ) {
+
   const clean =
     rows
-      .map(
-        d1RowToSource
-      )
+      .map(d1RowToSource)
       .filter(
         r =>
           String(
@@ -2323,151 +2015,113 @@ function buildLeaderboard(
           'completed'
       );
 
-  clean.sort(
-    (a, b) => {
+  clean.sort((a, b) => {
 
-      const score =
-        rankNumber(
-          b.score
-        ) -
-        rankNumber(
-          a.score
-        );
+    const score =
+      rankNumber(b.score) -
+      rankNumber(a.score);
 
-      if (score)
-        return score;
+    if (score) return score;
 
-      const acc =
-        rankNumber(
-          b.accuracy
-        ) -
-        rankNumber(
-          a.accuracy
-        );
+    const acc =
+      rankNumber(b.accuracy) -
+      rankNumber(a.accuracy);
 
-      if (acc)
-        return acc;
+    if (acc) return acc;
 
-      const time =
-        rankNumber(
-          a.time_taken ??
-          a.time_seconds ??
-          999999
-        ) -
-        rankNumber(
-          b.time_taken ??
-          b.time_seconds ??
-          999999
-        );
-
-      if (time)
-        return time;
-
-      return String(
-        a.completed_at ||
-        a.created_at ||
-        ''
-      ).localeCompare(
-        String(
-          b.completed_at ||
-          b.created_at ||
-          ''
-        )
+    const time =
+      rankNumber(
+        a.time_taken ??
+        a.time_seconds ??
+        999999
+      ) -
+      rankNumber(
+        b.time_taken ??
+        b.time_seconds ??
+        999999
       );
-    }
-  );
+
+    if (time) return time;
+
+    return String(
+      a.completed_at ||
+      a.created_at ||
+      ''
+    ).localeCompare(
+      String(
+        b.completed_at ||
+        b.created_at ||
+        ''
+      )
+    );
+  });
 
   const leaderboard =
-    clean.map(
-      (r, i) => ({
-        rank:
-          i + 1,
+    clean.map((r, i) => ({
 
-        user_id:
-          r.user_id,
+      rank:
+        i + 1,
 
-        username:
-          r.username ||
-          'User',
+      user_id:
+        r.user_id,
 
-        score:
-          rankNumber(
-            r.score
-          ),
+      username:
+        r.username ||
+        'User',
 
-        total_marks:
-          rankNumber(
-            r.total_marks
-          ),
+      score:
+        rankNumber(r.score),
 
-        accuracy:
-          rankNumber(
-            r.accuracy
-          ),
+      total_marks:
+        rankNumber(r.total_marks),
 
-        correct:
-          rankNumber(
-            r.correct
-          ),
+      accuracy:
+        rankNumber(r.accuracy),
 
-        wrong:
-          rankNumber(
-            r.wrong
-          ),
+      correct:
+        rankNumber(r.correct),
 
-        skipped:
-          rankNumber(
-            r.skipped
-          ),
+      wrong:
+        rankNumber(r.wrong),
 
-        time_taken:
-          rankNumber(
-            r.time_taken
-          ),
+      skipped:
+        rankNumber(r.skipped),
 
-        attempt_id:
-          r.attempt_id,
+      time_taken:
+        rankNumber(r.time_taken),
 
-        test_id:
-          r.test_id,
+      attempt_id:
+        r.attempt_id,
 
-        completed_at:
-          r.completed_at ||
-          r.created_at
-      })
-    );
+      test_id:
+        r.test_id,
+
+      completed_at:
+        r.completed_at ||
+        r.created_at
+    }));
 
   const me =
     leaderboard.find(
       r =>
-        String(
-          r.attempt_id
-        ) ===
-        String(
-          attemptId
-        )
+        String(r.attempt_id) ===
+        String(attemptId)
     ) ||
     leaderboard.find(
       r =>
-        String(
-          r.user_id
-        ) ===
-        String(
-          userId
-        )
+        String(r.user_id) ===
+        String(userId)
     );
 
   if (me) {
+
     me.percentile =
       leaderboard.length <= 1
         ? 100
         : Number(
             (
               (
-                (
-                  leaderboard.length -
-                  me.rank
-                ) /
+                (leaderboard.length - me.rank) /
                 leaderboard.length
               ) *
               100
@@ -2476,27 +2130,24 @@ function buildLeaderboard(
   }
 
   return {
-    success:
-      true,
-
+    success: true,
     leaderboard,
-
     participants:
       leaderboard.length,
-
     user:
       me || null,
-
     percentile:
       me?.percentile ??
       null
   };
 }
 
+
 async function handleRankSubmit(
   request,
   env
 ) {
+
   let body;
 
   try {
@@ -2513,6 +2164,7 @@ async function handleRankSubmit(
     !body.test_id ||
     !body.user_id
   ) {
+
     return bad(
       'attempt_id, test_id and user_id are required',
       400
@@ -2547,19 +2199,19 @@ async function handleRankSubmit(
   );
 
   return json({
-    success:
-      true,
-
+    success: true,
     source:
       'cloudflare_d1'
   });
 }
+
 
 async function handleRankLeaderboard(
   request,
   env,
   url
 ) {
+
   const testId =
     String(
       url.searchParams.get(
@@ -2582,6 +2234,7 @@ async function handleRankLeaderboard(
     ).trim();
 
   if (!testId) {
+
     return bad(
       'test_id is required',
       400
@@ -2591,10 +2244,7 @@ async function handleRankLeaderboard(
   const rows =
     await env.DB
       .prepare(
-        `SELECT *
-         FROM "emp_test_submissions"
-         WHERE "test_id" = ?
-         AND "status" = ?`
+        'SELECT * FROM "emp_test_submissions" WHERE "test_id" = ? AND "status" = ?'
       )
       .bind(
         testId,
@@ -2611,6 +2261,7 @@ async function handleRankLeaderboard(
   );
 }
 
+
 /* ============================================================
    ROUTER
    ============================================================ */
@@ -2619,15 +2270,15 @@ async function route(
   request,
   env
 ) {
+
   const url =
-    new URL(
-      request.url
-    );
+    new URL(request.url);
 
   if (
     request.method ===
     'OPTIONS'
   ) {
+
     return new Response(
       null,
       {
@@ -2644,6 +2295,7 @@ async function route(
       url.pathname ===
       '/api/import/json'
     ) {
+
       return await handleImportJson(
         request,
         env
@@ -2654,6 +2306,7 @@ async function route(
       url.pathname ===
       '/api/analytics/event'
     ) {
+
       return await handleAnalyticsEvent(
         request,
         env
@@ -2664,6 +2317,7 @@ async function route(
       url.pathname ===
       '/api/rank/submit'
     ) {
+
       return await handleRankSubmit(
         request,
         env
@@ -2674,6 +2328,7 @@ async function route(
       url.pathname ===
       '/api/rank/leaderboard'
     ) {
+
       return await handleRankLeaderboard(
         request,
         env,
@@ -2685,6 +2340,7 @@ async function route(
       url.pathname ===
       '/rest/v1/rpc/redeem_activation_code'
     ) {
+
       return await handleRedeemActivation(
         request,
         env
@@ -2695,6 +2351,7 @@ async function route(
       url.pathname ===
       '/rest/v1/rpc/get_bundle_entitlements'
     ) {
+
       return await handleGetBundleEntitlements(
         request,
         env
@@ -2706,21 +2363,15 @@ async function route(
         '/rest/v1/'
       )
     ) {
+
       const table =
         decodeURIComponent(
           url.pathname
-            .slice(
-              '/rest/v1/'.length
-            )
-            .replace(
-              /\/$/,
-              ''
-            )
+            .slice('/rest/v1/'.length)
+            .replace(/\/$/, '')
         );
 
-      if (
-        table.includes('/')
-      ) {
+      if (table.includes('/')) {
         return bad(
           'Unsupported REST path',
           404
@@ -2739,16 +2390,13 @@ async function route(
       url.pathname === '/' ||
       url.pathname === '/health'
     ) {
-      return json({
-        ok:
-          true,
 
+      return json({
+        ok: true,
         service:
           'ExamMaster Pro Cloudflare Worker',
-
         version:
-          'ACCESS-PUBLISH-FIX-2',
-
+          'V5.142-HTML-RECOVERY-FIX',
         time:
           nowIso()
       });
@@ -2777,15 +2425,18 @@ async function route(
   }
 }
 
+
 /* ============================================================
    CLOUDFLARE ENTRY
    ============================================================ */
 
 export default {
+
   async fetch(
     request,
     env
   ) {
+
     return route(
       request,
       env
