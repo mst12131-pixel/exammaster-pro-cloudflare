@@ -1,15 +1,6 @@
 /*
  * ExamMaster Pro - Cloudflare Worker / D1
- * ACCESS + PUBLISH SYNC FIX
- *
- * Includes:
- * - D1 database REST compatibility
- * - FREE / PAID access synchronization
- * - Test HTML preservation
- * - LIVE app release publishing
- * - Remote release HTML retrieval
- * - Analytics and ranking endpoints
- * - Activation code and entitlement endpoints
+ * ACCESS + PUBLISH SYNC + LIVE RELEASE FIX
  */
 
 const TABLES = new Set([
@@ -20,13 +11,12 @@ const TABLES = new Set([
 ]);
 
 const PUBLIC_TABLES = new Set([
-  'subjects', 'notes', 'bundles', 'bundle_tests',
-  'banners', 'content_notifications', 'app_releases'
+  'subjects', 'notes', 'bundles', 'bundle_tests', 'banners',
+  'content_notifications', 'app_releases'
 ]);
 
 const ADMIN_READ_TABLES = new Set([
-  'activation_codes', 'emp_analytics_events',
-  'admin_users', 'cf_users'
+  'activation_codes', 'emp_analytics_events', 'admin_users', 'cf_users'
 ]);
 
 function corsHeaders(extra = {}) {
@@ -182,14 +172,10 @@ function rowMatches(row, filters) {
           val.some(x => String(actual ?? '') === String(x));
 
       case 'is':
-        return val === null
-          ? actual == null
-          : Boolean(actual) === Boolean(val);
+        return val === null ? actual == null : Boolean(actual) === Boolean(val);
 
       case 'like':
-        return String(actual ?? '').includes(
-          String(val).replace(/%/g, '')
-        );
+        return String(actual ?? '').includes(String(val).replace(/%/g, ''));
 
       case 'ilike':
         return String(actual ?? '').toLowerCase().includes(
@@ -277,9 +263,7 @@ function normalizeTestAccess(source) {
     access_override: state,
     access_type: state,
     is_paid: state === 'paid',
-    price: state === 'paid'
-      ? Math.max(0, Number(s.price || 0) || 0)
-      : 0
+    price: state === 'paid' ? Math.max(0, Number(s.price || 0) || 0) : 0
   };
 }
 
@@ -303,7 +287,6 @@ function sourceRowToD1(table, source) {
       created_at: src.created_at ?? nowIso(),
       updated_at: src.updated_at ?? nowIso()
     });
-
   } else if (table === 'notes') {
     Object.assign(common, {
       subject_id: src.subject_id != null ? String(src.subject_id) : null,
@@ -315,14 +298,12 @@ function sourceRowToD1(table, source) {
       created_at: src.created_at ?? nowIso(),
       updated_at: src.updated_at ?? nowIso()
     });
-
   } else if (table === 'bundles') {
     Object.assign(common, {
       name: src.name ?? 'Untitled Bundle',
       description: src.description ?? null,
       updated_at: src.updated_at ?? nowIso()
     });
-
   } else if (table === 'bundle_tests') {
     const a = normalizeTestAccess(src);
 
@@ -337,8 +318,7 @@ function sourceRowToD1(table, source) {
     Object.assign(common, {
       bundle_id: src.bundle_id != null ? String(src.bundle_id) : '',
       bundle_subject_id: src.bundle_subject_id != null
-        ? String(src.bundle_subject_id)
-        : null,
+        ? String(src.bundle_subject_id) : null,
       bundle_subject_name: src.bundle_subject_name ?? null,
       name: src.name ?? 'Untitled Test',
       description: src.description ?? null,
@@ -355,7 +335,6 @@ function sourceRowToD1(table, source) {
       updated_at: src.updated_at ?? nowIso(),
       deleted_at: src.deleted_at ?? null
     });
-
   } else if (table === 'banners') {
     Object.assign(common, {
       title: src.title ?? null,
@@ -366,14 +345,12 @@ function sourceRowToD1(table, source) {
       link_type: src.link_type ?? null,
       link: src.link ?? null,
       bundle_id: src.bundle_id == null || src.bundle_id === ''
-        ? null
-        : String(src.bundle_id),
+        ? null : String(src.bundle_id),
       subject_id: src.subject_id ?? null,
       test_id: src.test_id ?? null,
       slide_seconds: src.slide_seconds ?? null,
       updated_at: src.updated_at ?? nowIso()
     });
-
   } else if (table === 'activation_codes') {
     Object.assign(common, {
       code: src.code ?? src.code_hash ?? null,
@@ -384,14 +361,12 @@ function sourceRowToD1(table, source) {
       redeemed_at: src.redeemed_at ?? null,
       created_at: src.created_at ?? nowIso()
     });
-
   } else if (table === 'entitlements') {
     Object.assign(common, {
       user_key: String(src.user_key ?? ''),
       bundle_id: src.bundle_id != null ? String(src.bundle_id) : '',
       created_at: src.created_at ?? nowIso()
     });
-
   } else if (table === 'emp_test_submissions') {
     Object.assign(common, {
       attempt_id: src.attempt_id ?? id,
@@ -409,7 +384,6 @@ function sourceRowToD1(table, source) {
       completed_at: src.completed_at ?? null,
       created_at: src.created_at ?? nowIso()
     });
-
   } else if (table === 'emp_analytics_events') {
     Object.assign(common, {
       user_id: src.user_id != null ? String(src.user_id) : null,
@@ -417,7 +391,6 @@ function sourceRowToD1(table, source) {
       event_type: src.event_type ?? null,
       occurred_at: src.occurred_at ?? nowIso()
     });
-
   } else if (table === 'content_notifications') {
     Object.assign(common, {
       title: src.title ?? null,
@@ -426,14 +399,12 @@ function sourceRowToD1(table, source) {
       content_id: src.content_id == null ? null : String(src.content_id),
       created_at: src.created_at ?? nowIso()
     });
-
   } else if (table === 'admin_users') {
     Object.assign(common, {
       user_id: String(src.user_id ?? id),
       email: src.email ?? null,
       created_at: src.created_at ?? nowIso()
     });
-
   } else if (table === 'app_releases') {
     Object.assign(common, {
       release_id: String(src.release_id ?? id),
@@ -444,7 +415,6 @@ function sourceRowToD1(table, source) {
       content_hash: src.content_hash ?? null,
       active: src.active ? 1 : 0
     });
-
   } else if (table === 'cf_users') {
     Object.assign(common, {
       email: src.email ?? null,
@@ -491,54 +461,51 @@ function d1RowToSource(row) {
 function tableColumns(table) {
   const map = {
     subjects: [
-      'id','name','description','icon','color',
-      'created_at','updated_at','data_json'
+      'id', 'name', 'description', 'icon', 'color',
+      'created_at', 'updated_at', 'data_json'
     ],
     notes: [
-      'id','subject_id','title','content','file_data','file_name',
-      'file_type','created_at','updated_at','data_json'
+      'id', 'subject_id', 'title', 'content', 'file_data',
+      'file_name', 'file_type', 'created_at', 'updated_at', 'data_json'
     ],
-    bundles: [
-      'id','name','description','updated_at','data_json'
-    ],
+    bundles: ['id', 'name', 'description', 'updated_at', 'data_json'],
     bundle_tests: [
-      'id','bundle_id','bundle_subject_id','bundle_subject_name',
-      'name','description','level','difficulty','time_limit',
-      'html_content','is_paid','access_type','access_mode',
-      'access_override','price','total_questions','updated_at',
-      'deleted_at','data_json'
+      'id', 'bundle_id', 'bundle_subject_id', 'bundle_subject_name',
+      'name', 'description', 'level', 'difficulty', 'time_limit',
+      'html_content', 'is_paid', 'access_type', 'access_mode',
+      'access_override', 'price', 'total_questions', 'updated_at',
+      'deleted_at', 'data_json'
     ],
     banners: [
-      'id','title','description','price','image','qrData','link_type',
-      'link','bundle_id','subject_id','test_id','slide_seconds',
-      'updated_at','data_json'
+      'id', 'title', 'description', 'price', 'image', 'qrData',
+      'link_type', 'link', 'bundle_id', 'subject_id', 'test_id',
+      'slide_seconds', 'updated_at', 'data_json'
     ],
     activation_codes: [
-      'id','code','bundle_id','amount','status','redeemed_by',
-      'redeemed_at','created_at','data_json'
+      'id', 'code', 'bundle_id', 'amount', 'status', 'redeemed_by',
+      'redeemed_at', 'created_at', 'data_json'
     ],
-    entitlements: [
-      'id','user_key','bundle_id','created_at','data_json'
-    ],
+    entitlements: ['id', 'user_key', 'bundle_id', 'created_at', 'data_json'],
     emp_test_submissions: [
-      'id','attempt_id','user_id','username','test_id','bundle_id',
-      'subject_id','test_name','score','total_marks','accuracy',
-      'percentile','status','completed_at','created_at','data_json'
+      'id', 'attempt_id', 'user_id', 'username', 'test_id',
+      'bundle_id', 'subject_id', 'test_name', 'score', 'total_marks',
+      'accuracy', 'percentile', 'status', 'completed_at', 'created_at',
+      'data_json'
     ],
     emp_analytics_events: [
-      'id','user_id','username','event_type','occurred_at','data_json'
+      'id', 'user_id', 'username', 'event_type', 'occurred_at', 'data_json'
     ],
     content_notifications: [
-      'id','title','description','content_type','content_id',
-      'created_at','data_json'
+      'id', 'title', 'description', 'content_type', 'content_id',
+      'created_at', 'data_json'
     ],
-    admin_users: ['user_id','email','created_at'],
+    admin_users: ['user_id', 'email', 'created_at'],
     app_releases: [
-      'release_id','release_path','release_url','published_at',
-      'size_bytes','content_hash','active','data_json'
+      'release_id', 'release_path', 'release_url', 'published_at',
+      'size_bytes', 'content_hash', 'active', 'data_json'
     ],
     cf_users: [
-      'id','email','password_hash','role','created_at','data_json'
+      'id', 'email', 'password_hash', 'role', 'created_at', 'data_json'
     ]
   };
 
@@ -547,10 +514,7 @@ function tableColumns(table) {
 
 function uniqueKey(table, src, conflict) {
   if (conflict && src[conflict] != null) {
-    return {
-      field: conflict,
-      value: String(src[conflict])
-    };
+    return { field: conflict, value: String(src[conflict]) };
   }
 
   if (table === 'admin_users') {
@@ -567,10 +531,7 @@ function uniqueKey(table, src, conflict) {
     };
   }
 
-  return {
-    field: 'id',
-    value: String(src.id)
-  };
+  return { field: 'id', value: String(src.id) };
 }
 
 function adminAllowed(request, env) {
@@ -596,8 +557,7 @@ async function readTable(env, table, url, options = {}) {
 
   let out = (rows.results || []).map(d1RowToSource);
 
-  const filters = parseFilters(url);
-  out = out.filter(r => rowMatches(r, filters));
+  out = out.filter(r => rowMatches(r, parseFilters(url)));
 
   if (
     table === 'bundle_tests' &&
@@ -612,9 +572,7 @@ async function readTable(env, table, url, options = {}) {
   for (let i = orders.length - 1; i >= 0; i--) {
     const o = orders[i];
 
-    out.sort((a, b) =>
-      o.dir * compareValue(a[o.field], b[o.field])
-    );
+    out.sort((a, b) => o.dir * compareValue(a[o.field], b[o.field]));
   }
 
   const offset = Math.max(
@@ -625,17 +583,15 @@ async function readTable(env, table, url, options = {}) {
   const limitRaw = url.searchParams.get('limit');
 
   if (limitRaw != null) {
-    out = out.slice(
-      offset,
-      offset + Math.max(0, Number(limitRaw) || 0)
-    );
+    out = out.slice(offset, offset + Math.max(0, Number(limitRaw) || 0));
   } else if (offset) {
     out = out.slice(offset);
   }
 
-  return out.map(r =>
-    applySelect(r, parseSelect(url.searchParams.get('select')))
-  );
+  return out.map(r => applySelect(
+    r,
+    parseSelect(url.searchParams.get('select'))
+  ));
 }
 
 async function upsertSourceRow(env, table, src, conflict) {
@@ -649,7 +605,6 @@ async function upsertSourceRow(env, table, src, conflict) {
     ? JSON.parse(JSON.stringify(src))
     : {};
 
-  // Keep existing test HTML when metadata-only updates arrive.
   if (
     table === 'bundle_tests' &&
     existingRow &&
@@ -668,12 +623,11 @@ async function upsertSourceRow(env, table, src, conflict) {
     }
   }
 
-  // Preserve access state if an update omits access fields.
   if (table === 'bundle_tests' && existingRow) {
     const old = d1RowToSource(existingRow);
 
     for (const k of [
-      'access_mode','access_override','access_type','is_paid','price'
+      'access_mode', 'access_override', 'access_type', 'is_paid', 'price'
     ]) {
       if (mergedSrc[k] == null || mergedSrc[k] === '') {
         mergedSrc[k] = old[k];
@@ -687,8 +641,8 @@ async function upsertSourceRow(env, table, src, conflict) {
 
   if (existingRow) {
     const updateCols = cols.filter(c => c !== key.field);
-
     const setParts = updateCols.map(c => `"${c}" = ?`);
+
     setParts.push('"data_json" = ?');
 
     const updateValues = [
@@ -699,7 +653,6 @@ async function upsertSourceRow(env, table, src, conflict) {
     await env.DB.prepare(
       `UPDATE "${table}" SET ${setParts.join(', ')} WHERE "${key.field}" = ?`
     ).bind(...updateValues, key.value).run();
-
   } else {
     const allCols = [...cols, 'data_json'];
     const placeholders = allCols.map(() => '?').join(', ');
@@ -713,12 +666,9 @@ async function upsertSourceRow(env, table, src, conflict) {
 }
 
 async function deleteByFilters(env, table, url) {
-  const rows = await readTable(
-    env,
-    table,
-    url,
-    { includeDeleted: true }
-  );
+  const rows = await readTable(env, table, url, {
+    includeDeleted: true
+  });
 
   let n = 0;
 
@@ -747,25 +697,18 @@ async function handleRest(request, env, table, url) {
   }
 
   const method = request.method;
-  const isWrite = ['POST','PATCH','PUT','DELETE'].includes(method);
+  const isWrite = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method);
 
   if (
     isWrite &&
     !adminAllowed(request, env) &&
-    ![
-      'emp_test_submissions',
-      'emp_analytics_events',
-      'entitlements'
-    ].includes(table)
+    !['emp_test_submissions', 'emp_analytics_events', 'entitlements'].includes(table)
   ) {
     return bad('Unauthorized', 401);
   }
 
   if (method === 'GET') {
-    if (
-      ADMIN_READ_TABLES.has(table) &&
-      !adminAllowed(request, env)
-    ) {
+    if (ADMIN_READ_TABLES.has(table) && !adminAllowed(request, env)) {
       return bad('Unauthorized', 401);
     }
 
@@ -789,9 +732,7 @@ async function handleRest(request, env, table, url) {
       out.push(await upsertSourceRow(env, table, src, conflict));
     }
 
-    const prefer = (
-      request.headers.get('Prefer') || ''
-    ).toLowerCase();
+    const prefer = (request.headers.get('Prefer') || '').toLowerCase();
 
     if (prefer.includes('return=minimal')) {
       return new Response(null, {
@@ -812,26 +753,22 @@ async function handleRest(request, env, table, url) {
       return bad('Invalid JSON body');
     }
 
-    const rows = await readTable(
-      env,
-      table,
-      url,
-      { includeDeleted: true }
-    );
+    const rows = await readTable(env, table, url, {
+      includeDeleted: true
+    });
 
     if (!rows.length) return json([]);
 
     const out = [];
 
     for (const row of rows) {
-      out.push(
-        await upsertSourceRow(env, table, { ...row, ...body }, null)
-      );
+      out.push(await upsertSourceRow(env, table, {
+        ...row,
+        ...body
+      }, null));
     }
 
-    const prefer = (
-      request.headers.get('Prefer') || ''
-    ).toLowerCase();
+    const prefer = (request.headers.get('Prefer') || '').toLowerCase();
 
     if (prefer.includes('return=minimal')) {
       return new Response(null, {
@@ -884,10 +821,7 @@ async function handleRedeemActivation(request, env) {
   const userKey = String(body.p_user_key || '').trim();
 
   if (!code || !bundleId || !userKey) {
-    return bad(
-      'p_code, p_bundle_id and p_user_key are required',
-      400
-    );
+    return bad('p_code, p_bundle_id and p_user_key are required', 400);
   }
 
   const codeRow = await env.DB.prepare(
@@ -965,9 +899,7 @@ async function handleGetBundleEntitlements(request, env) {
     body = await request.json();
   } catch (_) {}
 
-  const userKey = String(
-    body.p_user_key || body.user_key || ''
-  ).trim();
+  const userKey = String(body.p_user_key || body.user_key || '').trim();
 
   if (!userKey) return json([]);
 
@@ -1054,11 +986,9 @@ function rankNumber(v) {
 }
 
 function buildLeaderboard(rows, userId, attemptId) {
-  const clean = rows
-    .map(d1RowToSource)
-    .filter(r =>
-      String(r.status || 'completed').toLowerCase() === 'completed'
-    );
+  const clean = rows.map(d1RowToSource).filter(
+    r => String(r.status || 'completed').toLowerCase() === 'completed'
+  );
 
   clean.sort((a, b) => {
     const score = rankNumber(b.score) - rankNumber(a.score);
@@ -1075,11 +1005,8 @@ function buildLeaderboard(rows, userId, attemptId) {
 
     if (time) return time;
 
-    return String(
-      a.completed_at || a.created_at || ''
-    ).localeCompare(
-      String(b.completed_at || b.created_at || '')
-    );
+    return String(a.completed_at || a.created_at || '')
+      .localeCompare(String(b.completed_at || b.created_at || ''));
   });
 
   const leaderboard = clean.map((r, i) => ({
@@ -1099,20 +1026,13 @@ function buildLeaderboard(rows, userId, attemptId) {
   }));
 
   const me =
-    leaderboard.find(r =>
-      String(r.attempt_id) === String(attemptId)
-    ) ||
-    leaderboard.find(r =>
-      String(r.user_id) === String(userId)
-    );
+    leaderboard.find(r => String(r.attempt_id) === String(attemptId)) ||
+    leaderboard.find(r => String(r.user_id) === String(userId));
 
   if (me) {
     me.percentile = leaderboard.length <= 1
       ? 100
-      : Number(
-          (((leaderboard.length - me.rank) / leaderboard.length) * 100)
-            .toFixed(2)
-        );
+      : Number((((leaderboard.length - me.rank) / leaderboard.length) * 100).toFixed(2));
   }
 
   return {
@@ -1134,10 +1054,7 @@ async function handleRankSubmit(request, env) {
   }
 
   if (!body.attempt_id || !body.test_id || !body.user_id) {
-    return bad(
-      'attempt_id, test_id and user_id are required',
-      400
-    );
+    return bad('attempt_id, test_id and user_id are required', 400);
   }
 
   const row = {
@@ -1148,12 +1065,7 @@ async function handleRankSubmit(request, env) {
     created_at: body.created_at || nowIso()
   };
 
-  await upsertSourceRow(
-    env,
-    'emp_test_submissions',
-    row,
-    'attempt_id'
-  );
+  await upsertSourceRow(env, 'emp_test_submissions', row, 'attempt_id');
 
   return json({
     success: true,
@@ -1162,17 +1074,9 @@ async function handleRankSubmit(request, env) {
 }
 
 async function handleRankLeaderboard(request, env, url) {
-  const testId = String(
-    url.searchParams.get('test_id') || ''
-  ).trim();
-
-  const userId = String(
-    url.searchParams.get('user_id') || ''
-  ).trim();
-
-  const attemptId = String(
-    url.searchParams.get('attempt_id') || ''
-  ).trim();
+  const testId = String(url.searchParams.get('test_id') || '').trim();
+  const userId = String(url.searchParams.get('user_id') || '').trim();
+  const attemptId = String(url.searchParams.get('attempt_id') || '').trim();
 
   if (!testId) {
     return bad('test_id is required', 400);
@@ -1182,9 +1086,11 @@ async function handleRankLeaderboard(request, env, url) {
     'SELECT * FROM "emp_test_submissions" WHERE "test_id" = ? AND "status" = ?'
   ).bind(testId, 'completed').all();
 
-  return json(
-    buildLeaderboard(rows.results || [], userId, attemptId)
-  );
+  return json(buildLeaderboard(
+    rows.results || [],
+    userId,
+    attemptId
+  ));
 }
 
 async function handlePublishAppRelease(request, env) {
@@ -1211,10 +1117,6 @@ async function handlePublishAppRelease(request, env) {
     return bad('Invalid release HTML', 400);
   }
 
-  await env.DB.prepare(
-    'UPDATE "app_releases" SET "active" = 0'
-  ).run();
-
   const row = {
     id: releaseId,
     release_id: releaseId,
@@ -1223,26 +1125,42 @@ async function handlePublishAppRelease(request, env) {
     ),
     release_url: String(body.release_url || ''),
     published_at: String(body.published_at || nowIso()),
-    content_hash: body.content_hash || null,
+    content_hash: body.content_hash || await sha256Hex(html),
     size_bytes: Number(body.size_bytes) ||
       new TextEncoder().encode(html).length,
-    active: true,
+    active: false,
     html_content: html
   };
 
-  await upsertSourceRow(
-    env,
-    'app_releases',
-    row,
-    'release_id'
-  );
+  await upsertSourceRow(env, 'app_releases', row, 'release_id');
 
   const saved = await env.DB.prepare(
+    'SELECT * FROM "app_releases" WHERE "release_id" = ? LIMIT 1'
+  ).bind(releaseId).first();
+
+  if (!saved) {
+    return bad('Release save verification failed', 500);
+  }
+
+  const stored = d1RowToSource(saved);
+
+  if (
+    String(stored.html_content || '').length < 10000 ||
+    !String(stored.html_content || '').includes('ExamMaster Pro')
+  ) {
+    return bad('Release saved but HTML verification failed', 500);
+  }
+
+  await env.DB.prepare(
+    'UPDATE "app_releases" SET "active" = CASE WHEN "release_id" = ? THEN 1 ELSE 0 END'
+  ).bind(releaseId).run();
+
+  const active = await env.DB.prepare(
     'SELECT release_id, release_url, published_at, size_bytes, active FROM "app_releases" WHERE "release_id" = ? LIMIT 1'
   ).bind(releaseId).first();
 
-  if (!saved || Number(saved.active) !== 1) {
-    return bad('Release saved but verification failed', 500);
+  if (!active || Number(active.active) !== 1) {
+    return bad('Release stored but activation verification failed', 500);
   }
 
   const older = await env.DB.prepare(
@@ -1250,23 +1168,25 @@ async function handlePublishAppRelease(request, env) {
   ).all();
 
   for (const old of (older.results || [])) {
-    await env.DB.prepare(
-      'DELETE FROM "app_releases" WHERE "release_id" = ?'
-    ).bind(String(old.release_id)).run();
+    if (String(old.release_id) !== releaseId) {
+      await env.DB.prepare(
+        'DELETE FROM "app_releases" WHERE "release_id" = ?'
+      ).bind(String(old.release_id)).run();
+    }
   }
 
   return json({
     success: true,
     release_id: releaseId,
-    size_bytes: Number(saved.size_bytes) || row.size_bytes,
-    release_url: saved.release_url
+    size_bytes: Number(active.size_bytes) || row.size_bytes,
+    release_url: active.release_url || '',
+    published_at: active.published_at,
+    active: true
   });
 }
 
 async function handleGetAppRelease(request, env, url) {
-  const releaseId = String(
-    url.searchParams.get('release_id') || ''
-  ).trim();
+  const releaseId = String(url.searchParams.get('release_id') || '').trim();
 
   if (!releaseId) {
     return bad('release_id is required', 400);
@@ -1339,15 +1259,11 @@ async function route(request, env) {
       return await handleRankLeaderboard(request, env, url);
     }
 
-    if (
-      url.pathname === '/rest/v1/rpc/redeem_activation_code'
-    ) {
+    if (url.pathname === '/rest/v1/rpc/redeem_activation_code') {
       return await handleRedeemActivation(request, env);
     }
 
-    if (
-      url.pathname === '/rest/v1/rpc/get_bundle_entitlements'
-    ) {
+    if (url.pathname === '/rest/v1/rpc/get_bundle_entitlements') {
       return await handleGetBundleEntitlements(request, env);
     }
 
@@ -1367,13 +1283,12 @@ async function route(request, env) {
       return json({
         ok: true,
         service: 'ExamMaster Pro Cloudflare Worker',
-        version: 'ACCESS-PUBLISH-LIVE-RELEASE-FIX-2',
+        version: 'ACCESS-PUBLISH-LIVE-RELEASE-FIX-3',
         time: nowIso()
       });
     }
 
     return bad('Not found', 404);
-
   } catch (e) {
     console.error('Worker error:', e);
 
