@@ -1,40 +1,16 @@
-/*
- * ExamMaster Pro - Cloudflare Worker / D1
- * ACCESS + PUBLISH SYNC + LIVE RELEASE FIX
- *
- * Fixes:
- * 1. bundle_tests access state is authoritative and cannot be turned FREE by
- *    a stale data_json snapshot.
- * 2. FREE / PAID / price / access_mode / access_type / access_override / is_paid
- *    are kept synchronized with data_json.
- * 3. Access-only test updates never erase existing html_content.
- * 4. Public Test Mode can read published metadata, while admin writes remain
- *    protected when ADMIN_API_KEY is configured.
- * 5. Includes the REST compatibility layer used by the ExamMaster HTML app.
- * 6. Includes activation entitlement RPCs, analytics and ranking endpoints.
- * 7. Restores verified LIVE HTML release publish/content endpoints.
- */
-
 const TABLES = new Set([
-  'subjects','notes','bundles','bundle_tests','banners','activation_codes',
-  'entitlements','emp_test_submissions','emp_analytics_events',
-  'content_notifications','admin_users','app_releases','cf_users'
-]);
-
-const PUBLIC_TABLES = new Set([
-  'subjects','notes','bundles','bundle_tests','banners',
-  'content_notifications','app_releases'
-]);
-
-const ADMIN_READ_TABLES = new Set([
-  'activation_codes','emp_analytics_events','admin_users','cf_users'
+  'subjects', 'notes', 'bundles', 'bundle_tests', 'banners',
+  'activation_codes', 'entitlements', 'emp_test_submissions',
+  'emp_analytics_events', 'content_notifications', 'admin_users',
+  'app_releases', 'cf_users'
 ]);
 
 function corsHeaders(extra = {}) {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey, Prefer, X-EMP-Admin-Key, X-Client-Role',
+    'Access-Control-Allow-Headers':
+      'Content-Type, Authorization, apikey, Prefer, X-EMP-Admin-Key, X-Client-Role',
     'Access-Control-Max-Age': '86400',
     ...extra
   };
@@ -69,50 +45,43 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function cleanIdent(v) {
-  const s = String(v || '');
+function cleanIdent(value) {
+  const s = String(value || '');
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) ? s : null;
-}
-
-function decodeFilterValue(raw) {
-  try {
-    return decodeURIComponent(String(raw ?? ''));
-  } catch (_) {
-    return String(raw ?? '');
-  }
 }
 
 function parseFilters(url) {
   const filters = [];
 
   for (const [key, value] of url.searchParams.entries()) {
-    if ([
-      'select','order','limit','offset','on_conflict','columns','apikey'
-    ].includes(key)) continue;
+    if (
+      ['select', 'order', 'limit', 'offset', 'on_conflict',
+       'columns', 'apikey'].includes(key)
+    ) continue;
 
     if (key === 'or' || key === 'and') continue;
 
-    const m = String(value).match(
+    const match = String(value).match(
       /^(eq|neq|gt|gte|lt|lte|in|is|like|ilike)\.(.*)$/s
     );
 
-    if (!m) continue;
+    if (!match) continue;
 
-    const op = m[1];
-    let val = m[2];
+    const op = match[1];
+    let val = match[2];
 
     if (op === 'in') {
       val = val.replace(/^\(/, '').replace(/\)$/, '')
         .split(',')
-        .map(x => x.trim())
-        .filter(Boolean)
-        .map(x => x.replace(/^"|"$/g, ''))
-        .map(decodeFilterValue);
+        .map(x => x.trim().replace(/^"|"$/g, ''));
     } else if (op === 'is') {
-      const low = String(val).toLowerCase();
-      val = low === 'null' ? null : low === 'true';
+      val = val.toLowerCase() === 'null'
+        ? null
+        : val.toLowerCase() === 'true';
     } else {
-      val = decodeFilterValue(val);
+      try {
+        val = decodeURIComponent(val);
+      } catch (_) {}
     }
 
     filters.push({ key, op, val });
@@ -134,9 +103,7 @@ function compareValue(a, b) {
     Number.isFinite(nb) &&
     String(a).trim() !== '' &&
     String(b).trim() !== ''
-  ) {
-    return na - nb;
-  }
+  ) return na - nb;
 
   const da = Date.parse(String(a));
   const db = Date.parse(String(b));
@@ -145,11 +112,10 @@ function compareValue(a, b) {
     return da - db;
   }
 
-  return String(a).localeCompare(
-    String(b),
-    undefined,
-    { numeric: true, sensitivity: 'base' }
-  );
+  return String(a).localeCompare(String(b), undefined, {
+    numeric: true,
+    sensitivity: 'base'
+  });
 }
 
 function rowMatches(row, filters) {
@@ -160,39 +126,31 @@ function rowMatches(row, filters) {
     switch (f.op) {
       case 'eq':
         return String(actual ?? '') === String(val ?? '');
-
       case 'neq':
         return String(actual ?? '') !== String(val ?? '');
-
       case 'gt':
         return compareValue(actual, val) > 0;
-
       case 'gte':
         return compareValue(actual, val) >= 0;
-
       case 'lt':
         return compareValue(actual, val) < 0;
-
       case 'lte':
         return compareValue(actual, val) <= 0;
-
       case 'in':
         return Array.isArray(val) &&
           val.some(x => String(actual ?? '') === String(x));
-
       case 'is':
-        return val === null ? actual == null : Boolean(actual) === Boolean(val);
-
+        return val === null
+          ? actual == null
+          : Boolean(actual) === Boolean(val);
       case 'like':
         return String(actual ?? '').includes(
           String(val).replace(/%/g, '')
         );
-
       case 'ilike':
         return String(actual ?? '').toLowerCase().includes(
           String(val).replace(/%/g, '').toLowerCase()
         );
-
       default:
         return true;
     }
@@ -204,7 +162,9 @@ function parseSelect(raw) {
 
   return String(raw)
     .split(',')
-    .map(s => cleanIdent(s.trim()))
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(cleanIdent)
     .filter(Boolean);
 }
 
@@ -212,9 +172,8 @@ function applySelect(row, fields) {
   if (!fields) return row;
 
   const out = {};
-
-  for (const f of fields) {
-    out[f] = row[f] ?? null;
+  for (const field of fields) {
+    out[field] = row[field] ?? null;
   }
 
   return out;
@@ -225,59 +184,11 @@ function parseOrder(raw) {
 
   return String(raw).split(',').map(part => {
     const p = part.trim().split('.');
-
     return {
       field: cleanIdent(p[0]),
       dir: String(p[1] || 'asc').toLowerCase() === 'desc' ? -1 : 1
     };
   }).filter(x => x.field);
-}
-
-function normalizeAccessState(source) {
-  const s = source && typeof source === 'object' ? source : {};
-
-  const values = [
-    s.access_mode,
-    s.access_override,
-    s.access_type
-  ].map(v => String(v ?? '').toLowerCase());
-
-  if (
-    values.includes('paid') ||
-    s.is_paid === true ||
-    String(s.is_paid).toLowerCase() === 'true' ||
-    Number(s.is_paid) === 1 ||
-    Number(s.price) > 0
-  ) {
-    return 'paid';
-  }
-
-  if (
-    values.includes('free') ||
-    s.is_paid === false ||
-    String(s.is_paid).toLowerCase() === 'false' ||
-    Number(s.is_paid) === 0
-  ) {
-    return 'free';
-  }
-
-  return 'inherit';
-}
-
-function normalizeTestAccess(source) {
-  const s = source && typeof source === 'object' ? source : {};
-  const state = normalizeAccessState(s);
-
-  return {
-    state,
-    access_mode: state,
-    access_override: state,
-    access_type: state,
-    is_paid: state === 'paid',
-    price: state === 'paid'
-      ? Math.max(0, Number(s.price || 0) || 0)
-      : 0
-  };
 }
 
 function sourceRowToD1(table, source) {
@@ -286,7 +197,8 @@ function sourceRowToD1(table, source) {
     : {};
 
   const id = src.id != null ? String(src.id) : crypto.randomUUID();
-  const common = { id, data_json: JSON.stringify(src) };
+  const data = JSON.stringify(src);
+  const common = { id, data_json: data };
 
   if (table === 'subjects') {
     Object.assign(common, {
@@ -315,21 +227,10 @@ function sourceRowToD1(table, source) {
       updated_at: src.updated_at ?? nowIso()
     });
   } else if (table === 'bundle_tests') {
-    const a = normalizeTestAccess(src);
-
-    src.access_mode = a.access_mode;
-    src.access_override = a.access_override;
-    src.access_type = a.access_type;
-    src.is_paid = a.is_paid;
-    src.price = a.price;
-
-    common.data_json = JSON.stringify(src);
-
     Object.assign(common, {
       bundle_id: src.bundle_id != null ? String(src.bundle_id) : '',
       bundle_subject_id: src.bundle_subject_id != null
-        ? String(src.bundle_subject_id)
-        : null,
+        ? String(src.bundle_subject_id) : null,
       bundle_subject_name: src.bundle_subject_name ?? null,
       name: src.name ?? 'Untitled Test',
       description: src.description ?? null,
@@ -337,11 +238,11 @@ function sourceRowToD1(table, source) {
       difficulty: src.difficulty ?? null,
       time_limit: src.time_limit ?? null,
       html_content: src.html_content ?? null,
-      is_paid: a.is_paid ? 1 : 0,
-      access_type: a.access_type,
-      access_mode: a.access_mode,
-      access_override: a.access_override,
-      price: a.price,
+      is_paid: src.is_paid == null ? null : (src.is_paid ? 1 : 0),
+      access_type: src.access_type ?? null,
+      access_mode: src.access_mode ?? null,
+      access_override: src.access_override ?? null,
+      price: src.price ?? null,
       total_questions: src.total_questions ?? null,
       updated_at: src.updated_at ?? nowIso(),
       deleted_at: src.deleted_at ?? null
@@ -356,8 +257,7 @@ function sourceRowToD1(table, source) {
       link_type: src.link_type ?? null,
       link: src.link ?? null,
       bundle_id: src.bundle_id == null || src.bundle_id === ''
-        ? null
-        : String(src.bundle_id),
+        ? null : String(src.bundle_id),
       subject_id: src.subject_id ?? null,
       test_id: src.test_id ?? null,
       slide_seconds: src.slide_seconds ?? null,
@@ -375,7 +275,7 @@ function sourceRowToD1(table, source) {
     });
   } else if (table === 'entitlements') {
     Object.assign(common, {
-      user_key: String(src.user_key ?? ''),
+      user_key: src.user_key ?? '',
       bundle_id: src.bundle_id != null ? String(src.bundle_id) : '',
       created_at: src.created_at ?? nowIso()
     });
@@ -446,81 +346,62 @@ function d1RowToSource(row) {
     data = JSON.parse(row.data_json || '{}');
   } catch (_) {}
 
-  // Typed D1 columns are authoritative for explicitly stored fields.
-  // data_json retains nested fields and backward compatibility.
   const base = { ...row };
   delete base.data_json;
 
-  const out = { ...data, ...base };
-
-  if (
-    String(row.bundle_id ?? '') !== '' &&
-    Object.prototype.hasOwnProperty.call(out, 'name')
-  ) {
-    const mergedAccess = normalizeTestAccess({
-      ...data,
-      ...row
-    });
-
-    out.access_mode = mergedAccess.access_mode;
-    out.access_override = mergedAccess.access_override;
-    out.access_type = mergedAccess.access_type;
-    out.is_paid = mergedAccess.is_paid;
-    out.price = mergedAccess.price;
-  }
-
-  return out;
+  return { ...base, ...data };
 }
 
 function tableColumns(table) {
   const map = {
     subjects: [
-      'id','name','description','icon','color','created_at','updated_at','data_json'
+      'id', 'name', 'description', 'icon', 'color',
+      'created_at', 'updated_at', 'data_json'
     ],
     notes: [
-      'id','subject_id','title','content','file_data','file_name','file_type',
-      'created_at','updated_at','data_json'
+      'id', 'subject_id', 'title', 'content', 'file_data',
+      'file_name', 'file_type', 'created_at', 'updated_at', 'data_json'
     ],
-    bundles: [
-      'id','name','description','updated_at','data_json'
-    ],
+    bundles: ['id', 'name', 'description', 'updated_at', 'data_json'],
     bundle_tests: [
-      'id','bundle_id','bundle_subject_id','bundle_subject_name','name',
-      'description','level','difficulty','time_limit','html_content','is_paid',
-      'access_type','access_mode','access_override','price','total_questions',
-      'updated_at','deleted_at','data_json'
+      'id', 'bundle_id', 'bundle_subject_id', 'bundle_subject_name',
+      'name', 'description', 'level', 'difficulty', 'time_limit',
+      'html_content', 'is_paid', 'access_type', 'access_mode',
+      'access_override', 'price', 'total_questions', 'updated_at',
+      'deleted_at', 'data_json'
     ],
     banners: [
-      'id','title','description','price','image','qrData','link_type','link',
-      'bundle_id','subject_id','test_id','slide_seconds','updated_at','data_json'
+      'id', 'title', 'description', 'price', 'image', 'qrData',
+      'link_type', 'link', 'bundle_id', 'subject_id', 'test_id',
+      'slide_seconds', 'updated_at', 'data_json'
     ],
     activation_codes: [
-      'id','code','bundle_id','amount','status','redeemed_by','redeemed_at',
-      'created_at','data_json'
+      'id', 'code', 'bundle_id', 'amount', 'status',
+      'redeemed_by', 'redeemed_at', 'created_at', 'data_json'
     ],
     entitlements: [
-      'id','user_key','bundle_id','created_at','data_json'
+      'id', 'user_key', 'bundle_id', 'created_at', 'data_json'
     ],
     emp_test_submissions: [
-      'id','attempt_id','user_id','username','test_id','bundle_id','subject_id',
-      'test_name','score','total_marks','accuracy','percentile','status',
-      'completed_at','created_at','data_json'
+      'id', 'attempt_id', 'user_id', 'username', 'test_id',
+      'bundle_id', 'subject_id', 'test_name', 'score', 'total_marks',
+      'accuracy', 'percentile', 'status', 'completed_at',
+      'created_at', 'data_json'
     ],
     emp_analytics_events: [
-      'id','user_id','username','event_type','occurred_at','data_json'
+      'id', 'user_id', 'username', 'event_type', 'occurred_at', 'data_json'
     ],
     content_notifications: [
-      'id','title','description','content_type','content_id','created_at','data_json'
+      'id', 'title', 'description', 'content_type',
+      'content_id', 'created_at', 'data_json'
     ],
-    admin_users: [
-      'user_id','email','created_at'
-    ],
+    admin_users: ['user_id', 'email', 'created_at'],
     app_releases: [
-      'release_id','release_path','release_url','published_at','size_bytes',
-      'content_hash','active','data_json'
+      'release_id', 'release_path', 'release_url', 'published_at',
+      'size_bytes', 'content_hash', 'active', 'data_json'
     ],
     cf_users: [
-      'id','email','password_hash','role','created_at','data_json'
+      'id', 'email', 'password_hash', 'role', 'created_at', 'data_json'
     ]
   };
 
@@ -528,7 +409,11 @@ function tableColumns(table) {
 }
 
 function uniqueKey(table, src, conflict) {
-  if (conflict && src[conflict] != null) {
+  if (
+    conflict &&
+    table === 'emp_test_submissions' &&
+    src[conflict] != null
+  ) {
     return { field: conflict, value: String(src[conflict]) };
   }
 
@@ -553,7 +438,7 @@ function adminAllowed(request, env) {
   return supplied === env.ADMIN_API_KEY;
 }
 
-async function readTable(env, table, url, options = {}) {
+async function readTable(env, table, url) {
   const cols = tableColumns(table);
 
   if (!cols.length) {
@@ -565,25 +450,16 @@ async function readTable(env, table, url, options = {}) {
   ).all();
 
   let out = (rows.results || []).map(d1RowToSource);
-
-  const filters = parseFilters(url);
-  out = out.filter(r => rowMatches(r, filters));
-
-  // Hide soft-deleted tests unless explicitly requested.
-  if (
-    table === 'bundle_tests' &&
-    !options.includeDeleted &&
-    !url.searchParams.has('deleted_at')
-  ) {
-    out = out.filter(r => !String(r.deleted_at || '').trim());
-  }
+  out = out.filter(r => rowMatches(r, parseFilters(url)));
 
   const orders = parseOrder(url.searchParams.get('order'));
 
   for (let i = orders.length - 1; i >= 0; i--) {
-    const o = orders[i];
+    const order = orders[i];
 
-    out.sort((a, b) => o.dir * compareValue(a[o.field], b[o.field]));
+    out.sort((a, b) =>
+      order.dir * compareValue(a[order.field], b[order.field])
+    );
   }
 
   const offset = Math.max(
@@ -602,93 +478,52 @@ async function readTable(env, table, url, options = {}) {
     out = out.slice(offset);
   }
 
-  return out.map(r =>
-    applySelect(r, parseSelect(url.searchParams.get('select')))
-  );
+  const fields = parseSelect(url.searchParams.get('select'));
+
+  return out.map(row => applySelect(row, fields));
 }
 
 async function upsertSourceRow(env, table, src, conflict) {
+  const d = sourceRowToD1(table, src);
+  const cols = tableColumns(table).filter(c => c !== 'data_json');
   const key = uniqueKey(table, src, conflict);
 
-  const existingRow = await env.DB.prepare(
-    `SELECT * FROM "${table}" WHERE "${key.field}" = ? LIMIT 1`
+  const existing = await env.DB.prepare(
+    `SELECT 1 FROM "${table}" WHERE "${key.field}" = ? LIMIT 1`
   ).bind(key.value).first();
 
-  let mergedSrc = src && typeof src === 'object'
-    ? JSON.parse(JSON.stringify(src))
-    : {};
-
-  // Preserve existing test HTML when only metadata/access is being updated.
-  if (
-    table === 'bundle_tests' &&
-    existingRow &&
-    !String(mergedSrc.html_content || '').trim()
-  ) {
-    if (String(existingRow.html_content || '').trim()) {
-      mergedSrc.html_content = existingRow.html_content;
-    } else {
-      try {
-        const oldData = JSON.parse(existingRow.data_json || '{}');
-
-        if (String(oldData.html_content || '').trim()) {
-          mergedSrc.html_content = oldData.html_content;
-        }
-      } catch (_) {}
-    }
-  }
-
-  if (table === 'bundle_tests' && existingRow) {
-    // Keep existing access state if incoming payload omits access fields.
-    const old = d1RowToSource(existingRow);
-
-    for (const k of [
-      'access_mode','access_override','access_type','is_paid','price'
-    ]) {
-      if (mergedSrc[k] == null || mergedSrc[k] === '') {
-        mergedSrc[k] = old[k];
-      }
-    }
-  }
-
-  const d = sourceRowToD1(table, mergedSrc);
-  const cols = tableColumns(table).filter(c => c !== 'data_json');
   const values = cols.map(c => d[c] ?? null);
 
-  if (existingRow) {
-    const updateCols = cols.filter(c => c !== key.field);
-    const setParts = updateCols.map(c => `"${c}" = ?`);
+  if (existing) {
+    const set = cols
+      .filter(c => c !== key.field)
+      .map(c => `"${c}"=?`)
+      .join(',');
 
-    setParts.push('"data_json" = ?');
-
-    const updateValues = [
-      ...updateCols.map(c => d[c] ?? null),
-      d.data_json
-    ];
+    const vals = cols
+      .filter(c => c !== key.field)
+      .map(c => d[c] ?? null);
 
     await env.DB.prepare(
-      `UPDATE "${table}" SET ${setParts.join(', ')} WHERE "${key.field}" = ?`
-    ).bind(...updateValues, key.value).run();
+      `UPDATE "${table}" SET ${set} WHERE "${key.field}"=?`
+    ).bind(...vals, key.value).run();
   } else {
-    const allCols = [...cols, 'data_json'];
-    const placeholders = allCols.map(() => '?').join(', ');
+    const all = [...cols, 'data_json'];
+    const placeholders = all.map(() => '?').join(',');
+    const vals = [...values, d.data_json];
 
     await env.DB.prepare(
-      `INSERT INTO "${table}" (${allCols.map(c => '"' + c + '"').join(', ')}) VALUES (${placeholders})`
-    ).bind(...values, d.data_json).run();
+      `INSERT INTO "${table}" (${all.map(c => '"' + c + '"').join(',')})
+       VALUES (${placeholders})`
+    ).bind(...vals).run();
   }
 
   return d;
 }
 
 async function deleteByFilters(env, table, url) {
-  const rows = await readTable(
-    env,
-    table,
-    url,
-    { includeDeleted: true }
-  );
-
-  let n = 0;
+  const rows = await readTable(env, table, url);
+  let count = 0;
 
   for (const row of rows) {
     const key = table === 'admin_users'
@@ -697,16 +532,18 @@ async function deleteByFilters(env, table, url) {
         ? 'release_id'
         : 'id';
 
-    if (row[key] == null) continue;
+    const value = row[key];
 
-    const r = await env.DB.prepare(
-      `DELETE FROM "${table}" WHERE "${key}" = ?`
-    ).bind(String(row[key])).run();
+    if (value == null) continue;
 
-    n += Number(r.meta?.changes || 0);
+    const result = await env.DB.prepare(
+      `DELETE FROM "${table}" WHERE "${key}"=?`
+    ).bind(String(value)).run();
+
+    count += Number(result.meta?.changes || 0);
   }
 
-  return n;
+  return count;
 }
 
 async function handleRest(request, env, table, url) {
@@ -715,21 +552,17 @@ async function handleRest(request, env, table, url) {
   }
 
   const method = request.method;
-  const isWrite = ['POST','PATCH','PUT','DELETE'].includes(method);
+  const isWrite = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method);
 
   if (
     isWrite &&
     !adminAllowed(request, env) &&
-    !['emp_test_submissions','emp_analytics_events','entitlements'].includes(table)
+    !['emp_test_submissions', 'emp_analytics_events', 'entitlements'].includes(table)
   ) {
     return bad('Unauthorized', 401);
   }
 
   if (method === 'GET') {
-    if (ADMIN_READ_TABLES.has(table) && !adminAllowed(request, env)) {
-      return bad('Unauthorized', 401);
-    }
-
     return json(await readTable(env, table, url));
   }
 
@@ -771,21 +604,19 @@ async function handleRest(request, env, table, url) {
       return bad('Invalid JSON body');
     }
 
-    const rows = await readTable(
-      env,
-      table,
-      url,
-      { includeDeleted: true }
-    );
+    const rows = await readTable(env, table, url);
 
     if (!rows.length) return json([]);
 
     const out = [];
 
     for (const row of rows) {
-      out.push(
-        await upsertSourceRow(env, table, { ...row, ...body }, null)
-      );
+      out.push(await upsertSourceRow(
+        env,
+        table,
+        Object.assign({}, row, body),
+        null
+      ));
     }
 
     const prefer = (request.headers.get('Prefer') || '').toLowerCase();
@@ -797,7 +628,7 @@ async function handleRest(request, env, table, url) {
       });
     }
 
-    return json(out.map(d1RowToSource));
+    return json(out);
   }
 
   if (method === 'DELETE') {
@@ -809,14 +640,16 @@ async function handleRest(request, env, table, url) {
 
     return new Response(null, {
       status: 204,
-      headers: corsHeaders({
-        'X-Deleted-Rows': String(count)
-      })
+      headers: corsHeaders({ 'X-Deleted-Rows': String(count) })
     });
   }
 
   return bad('Method not allowed', 405);
 }
+
+/* =========================================================
+   ACTIVATION CODE HELPERS
+   ========================================================= */
 
 async function sha256Hex(value) {
   const bytes = new TextEncoder().encode(String(value));
@@ -827,322 +660,329 @@ async function sha256Hex(value) {
     .join('');
 }
 
-async function handleRedeemActivation(request, env) {
-  let body;
-
-  try {
-    body = await request.json();
-  } catch (_) {
-    return bad('Invalid JSON body');
-  }
-
-  const code = String(body.p_code || '').trim();
-  const bundleId = String(body.p_bundle_id ?? '').trim();
-  const userKey = String(body.p_user_key || '').trim();
-
-  if (!code || !bundleId || !userKey) {
-    return bad(
-      'p_code, p_bundle_id and p_user_key are required',
-      400
-    );
-  }
-
-  const codeRow = await env.DB.prepare(
-    'SELECT * FROM "activation_codes" WHERE "code" = ? LIMIT 1'
-  ).bind(code).first();
-
-  if (!codeRow) {
-    return json({ status: 'invalid' });
-  }
-
-  const activation = d1RowToSource(codeRow);
-
-  if (String(activation.bundle_id) !== bundleId) {
-    return json({
-      status: 'wrong_bundle',
-      bundle_id: String(activation.bundle_id || '')
-    });
-  }
-
-  const status = String(activation.status || '').toLowerCase();
-
-  if (status === 'used' || activation.redeemed_by) {
-    return json({
-      status: 'used',
-      bundle_id: bundleId
-    });
-  }
-
-  const existing = await env.DB.prepare(
-    'SELECT 1 FROM "entitlements" WHERE "user_key" = ? AND "bundle_id" = ? LIMIT 1'
-  ).bind(userKey, bundleId).first();
-
-  if (existing) {
-    return json({
-      status: 'already_owned',
-      bundle_id: bundleId
-    });
-  }
-
-  const now = nowIso();
-
-  await env.DB.prepare(
-    'UPDATE "activation_codes" SET "status" = ?, "redeemed_by" = ?, "redeemed_at" = ?, "data_json" = ? WHERE "id" = ?'
-  ).bind(
-    'used',
-    userKey,
-    now,
-    JSON.stringify({
-      ...activation,
-      status: 'used',
-      redeemed_by: userKey,
-      redeemed_at: now
-    }),
-    String(codeRow.id)
-  ).run();
-
-  const ent = {
-    id: crypto.randomUUID(),
-    user_key: userKey,
-    bundle_id: bundleId,
-    created_at: now
-  };
-
-  await upsertSourceRow(env, 'entitlements', ent, null);
-
-  return json({
-    status: 'success',
-    bundle_id: bundleId,
-    user_key: userKey
-  });
+function normalizeActivationCode(value) {
+  return String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
 }
 
-async function handleGetBundleEntitlements(request, env) {
+function safeJsonParse(value) {
+  try {
+    return JSON.parse(value || '{}');
+  } catch (_) {
+    return {};
+  }
+}
+
+function activationCodeMatches(row, inputCode, hashes) {
+  const data = safeJsonParse(row.data_json);
+
+  const candidates = [
+    row.code,
+    data.code,
+    data.code_hash,
+    data.activation_code,
+    data.activationCode
+  ]
+    .filter(v => v != null && String(v).trim() !== '')
+    .map(v => String(v).trim());
+
+  const inputNormalized = normalizeActivationCode(inputCode);
+
+  for (const candidate of candidates) {
+    const candidateNormalized = normalizeActivationCode(candidate);
+
+    // Supports an exact stored code.
+    if (candidate === inputCode.trim()) return true;
+
+    // Supports case and whitespace normalization.
+    if (candidateNormalized === inputNormalized) return true;
+
+    // Supports SHA-256 hashes stored in the code column or JSON data.
+    if (hashes.has(candidate.toLowerCase())) return true;
+  }
+
+  return false;
+}
+
+async function handleRedeemActivation(request, env) {
   let body = {};
 
   try {
     body = await request.json();
-  } catch (_) {}
-
-  const userKey = String(
-    body.p_user_key || body.user_key || ''
-  ).trim();
-
-  if (!userKey) return json([]);
-
-  const rows = await env.DB.prepare(
-    'SELECT * FROM "entitlements" WHERE "user_key" = ? ORDER BY "created_at" DESC'
-  ).bind(userKey).all();
-
-  return json((rows.results || []).map(d1RowToSource));
-}
-
-async function handleImportJson(request, env) {
-  if (!adminAllowed(request, env)) {
-    return bad('Unauthorized', 401);
-  }
-
-  let body;
-
-  try {
-    body = await request.json();
   } catch (_) {
     return bad('Invalid JSON body');
   }
 
-  const table = String(body.table || '').trim();
-  const rows = Array.isArray(body.rows) ? body.rows : [];
+  const suppliedCode = String(body.p_code ?? '').trim();
+  const bundleId = String(body.p_bundle_id ?? '').trim();
+  const userKey = String(body.p_user_key ?? '').trim();
 
-  if (!table || !rows.length) {
+  if (!suppliedCode || !bundleId || !userKey) {
     return json({
-      received: rows.length,
-      written: 0,
-      bundle_tests_written: 0
+      status: 'error',
+      message: 'Missing activation code, bundle ID or user key.'
+    }, 400);
+  }
+
+  /*
+   * Try the commonly used code representations.
+   * This does not bypass bundle matching or one-time redemption.
+   */
+  const normalizedCode = normalizeActivationCode(suppliedCode);
+
+  const hashes = new Set([
+    await sha256Hex(suppliedCode),
+    await sha256Hex(normalizedCode)
+  ]);
+
+  let matchingRow = null;
+  let matchingBundleRow = null;
+
+  /*
+   * Read activation codes and compare both the code column and
+   * JSON fields. This handles raw codes and SHA-256 hashes.
+   */
+  const result = await env.DB.prepare(
+    `SELECT id, code, bundle_id, amount, status,
+            redeemed_by, redeemed_at, created_at, data_json
+     FROM activation_codes`
+  ).all();
+
+  const rows = result.results || [];
+
+  for (const row of rows) {
+    if (!activationCodeMatches(row, suppliedCode, hashes)) {
+      continue;
+    }
+
+    if (String(row.bundle_id ?? '').trim() === bundleId) {
+      matchingBundleRow = row;
+      break;
+    }
+
+    if (!matchingRow) {
+      matchingRow = row;
+    }
+  }
+
+  if (!matchingBundleRow) {
+    if (matchingRow) {
+      return json({
+        status: 'bundle_mismatch',
+        message: 'This activation code belongs to a different bundle.'
+      });
+    }
+
+    return json({
+      status: 'invalid',
+      message: 'Invalid activation code. Please check the code and try again.'
     });
   }
 
-  let target = table;
+  const row = matchingBundleRow;
+  const currentStatus = String(row.status ?? 'unused')
+    .trim()
+    .toLowerCase();
 
-  if (target === 'tests') {
-    target = 'bundle_tests';
+  if (!['unused', 'generated', 'active', ''].includes(currentStatus)) {
+    return json({
+      status: 'used',
+      message: 'This activation code has already been redeemed.'
+    });
   }
 
-  if (!TABLES.has(target)) {
-    return bad('Unsupported import table: ' + target, 400);
+  const now = nowIso();
+  const data = safeJsonParse(row.data_json);
+
+  /*
+   * Use a conditional update so a previously redeemed code
+   * cannot be redeemed again.
+   */
+  const update = await env.DB.prepare(
+    `UPDATE activation_codes
+     SET status = ?,
+         redeemed_by = ?,
+         redeemed_at = ?,
+         data_json = ?
+     WHERE id = ?
+       AND LOWER(COALESCE(status, 'unused')) IN ('unused', 'generated', 'active', '')`
+  ).bind(
+    'redeemed',
+    userKey,
+    now,
+    JSON.stringify({
+      ...data,
+      status: 'redeemed',
+      redeemed_by: userKey,
+      redeemed_at: now
+    }),
+    row.id
+  ).run();
+
+  if (Number(update.meta?.changes ?? 0) !== 1) {
+    return json({
+      status: 'used',
+      message: 'This activation code has already been redeemed.'
+    });
+  }
+
+  const entitlementId = crypto.randomUUID();
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO entitlements
+       (id, user_key, bundle_id, created_at, data_json)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(
+    entitlementId,
+    userKey,
+    bundleId,
+    now,
+    JSON.stringify({
+      user_key: userKey,
+      bundle_id: bundleId,
+      created_at: now,
+      activation_id: row.id
+    })
+  ).run();
+
+  return json({
+    status: 'success',
+    bundle_id: bundleId,
+    redeemed_by: userKey,
+    redeemed_at: now
+  });
+}
+
+/* =========================================================
+   IMPORT AND MIGRATION
+   ========================================================= */
+
+async function fetchSupabaseJson(url, key) {
+  const response = await fetch(url, {
+    headers: {
+      apikey: key,
+      Authorization: 'Bearer ' + key,
+      Accept: 'application/json'
+    },
+    cf: {
+      cacheTtl: 0,
+      cacheEverything: false
+    }
+  });
+
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      'Supabase ' + response.status + ' ' + body.slice(0, 220)
+    );
+  }
+
+  let data;
+
+  try {
+    data = JSON.parse(body);
+  } catch (_) {
+    throw new Error('Invalid JSON from Supabase');
+  }
+
+  return Array.isArray(data) ? data : [];
+}
+
+async function migrateStoreFromSupabase(env, table) {
+  if (!TABLES.has(table)) {
+    throw new Error('Unsupported table ' + table);
+  }
+
+  const base = String(env.SUPABASE_URL || '').replace(/\/$/, '');
+  const key = String(env.SUPABASE_KEY || '');
+
+  if (!base || !key) {
+    throw new Error(
+      'SUPABASE_URL and SUPABASE_KEY secrets are not configured.'
+    );
+  }
+
+  let rows = [];
+
+  if (table === 'bundles') {
+    const ids = await fetchSupabaseJson(
+      base + '/rest/v1/bundles?select=id&order=id.asc',
+      key
+    );
+
+    for (const item of ids) {
+      if (item?.id == null) continue;
+
+      const part = await fetchSupabaseJson(
+        base + '/rest/v1/bundles?select=*&id=eq.' +
+        encodeURIComponent(String(item.id)),
+        key
+      );
+
+      if (part[0]) rows.push(part[0]);
+    }
+  } else {
+    let offset = 0;
+    const pageSize = 500;
+
+    while (true) {
+      const part = await fetchSupabaseJson(
+        base + '/rest/v1/' + table +
+        '?select=*&limit=' + pageSize + '&offset=' + offset,
+        key
+      );
+
+      rows.push(...part);
+
+      if (part.length < pageSize) break;
+
+      offset += part.length;
+
+      if (offset > 50000) break;
+    }
   }
 
   let written = 0;
 
-  for (const row of rows) {
-    await upsertSourceRow(env, target, row, null);
+  for (const src of rows) {
+    await upsertSourceRow(env, table, src, null);
     written++;
   }
 
-  return json({
-    received: rows.length,
-    written,
-    bundle_tests_written: target === 'bundle_tests' ? written : 0
-  });
-}
-
-async function handleAnalyticsEvent(request, env) {
-  let body;
-
-  try {
-    body = await request.json();
-  } catch (_) {
-    return bad('Invalid JSON body');
-  }
-
-  if (!body.user_id) {
-    return bad('user_id is required', 400);
-  }
-
-  const row = {
-    ...body,
-    id: body.id || crypto.randomUUID(),
-    occurred_at: body.occurred_at || nowIso()
-  };
-
-  await upsertSourceRow(env, 'emp_analytics_events', row, null);
-
-  return json({ success: true });
-}
-
-function rankNumber(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function buildLeaderboard(rows, userId, attemptId) {
-  const clean = rows
-    .map(d1RowToSource)
-    .filter(r =>
-      String(r.status || 'completed').toLowerCase() === 'completed'
-    );
-
-  clean.sort((a, b) => {
-    const score = rankNumber(b.score) - rankNumber(a.score);
-
-    if (score) return score;
-
-    const acc = rankNumber(b.accuracy) - rankNumber(a.accuracy);
-
-    if (acc) return acc;
-
-    const time = rankNumber(
-      a.time_taken ?? a.time_seconds ?? 999999
-    ) - rankNumber(
-      b.time_taken ?? b.time_seconds ?? 999999
-    );
-
-    if (time) return time;
-
-    return String(a.completed_at || a.created_at || '')
-      .localeCompare(String(b.completed_at || b.created_at || ''));
-  });
-
-  const leaderboard = clean.map((r, i) => ({
-    rank: i + 1,
-    user_id: r.user_id,
-    username: r.username || 'User',
-    score: rankNumber(r.score),
-    total_marks: rankNumber(r.total_marks),
-    accuracy: rankNumber(r.accuracy),
-    correct: rankNumber(r.correct),
-    wrong: rankNumber(r.wrong),
-    skipped: rankNumber(r.skipped),
-    time_taken: rankNumber(r.time_taken),
-    attempt_id: r.attempt_id,
-    test_id: r.test_id,
-    completed_at: r.completed_at || r.created_at
-  }));
-
-  const me =
-    leaderboard.find(r => String(r.attempt_id) === String(attemptId)) ||
-    leaderboard.find(r => String(r.user_id) === String(userId));
-
-  if (me) {
-    me.percentile = leaderboard.length <= 1
-      ? 100
-      : Number((
-        ((leaderboard.length - me.rank) / leaderboard.length) * 100
-      ).toFixed(2));
-  }
-
   return {
-    success: true,
-    leaderboard,
-    participants: leaderboard.length,
-    user: me || null,
-    percentile: me?.percentile ?? null
+    table,
+    source_rows: rows.length,
+    written
   };
 }
 
-async function handleRankSubmit(request, env) {
-  let body;
-
-  try {
-    body = await request.json();
-  } catch (_) {
-    return bad('Invalid JSON body');
+async function importRowsToD1(env, table, rows) {
+  if (!TABLES.has(table)) {
+    throw new Error('Unsupported table ' + table);
   }
 
-  if (!body.attempt_id || !body.test_id || !body.user_id) {
-    return bad(
-      'attempt_id, test_id and user_id are required',
-      400
-    );
+  if (!Array.isArray(rows)) {
+    throw new Error('rows must be an array');
   }
 
-  const row = {
-    ...body,
-    id: body.id || crypto.randomUUID(),
-    status: body.status || 'completed',
-    completed_at: body.completed_at || nowIso(),
-    created_at: body.created_at || nowIso()
-  };
+  let written = 0;
 
-  await upsertSourceRow(
-    env,
-    'emp_test_submissions',
-    row,
-    'attempt_id'
-  );
+  for (const src of rows) {
+    await upsertSourceRow(env, table, src, null);
+    written++;
+  }
 
-  return json({
-    success: true,
-    source: 'cloudflare_d1'
-  });
+  return written;
 }
 
-async function handleRankLeaderboard(request, env, url) {
-  const testId = String(
-    url.searchParams.get('test_id') || ''
-  ).trim();
-
-  const userId = String(
-    url.searchParams.get('user_id') || ''
-  ).trim();
-
-  const attemptId = String(
-    url.searchParams.get('attempt_id') || ''
-  ).trim();
-
-  if (!testId) {
-    return bad('test_id is required', 400);
+async function handleJsonImport(request, env) {
+  if (request.method !== 'POST') {
+    return bad('Method not allowed', 405);
   }
 
-  const rows = await env.DB.prepare(
-    'SELECT * FROM "emp_test_submissions" WHERE "test_id" = ? AND "status" = ?'
-  ).bind(testId, 'completed').all();
-
-  return json(
-    buildLeaderboard(rows.results || [], userId, attemptId)
-  );
-}
-
-async function handlePublishAppRelease(request, env) {
   if (!adminAllowed(request, env)) {
     return bad('Unauthorized', 401);
   }
@@ -1155,207 +995,342 @@ async function handlePublishAppRelease(request, env) {
     return bad('Invalid JSON body');
   }
 
-  const releaseId = String(body.release_id || '').trim();
-  const html = String(body.html_content || '');
+  const table = String(body?.table || '').trim();
+  const rows = Array.isArray(body?.rows) ? body.rows : [];
 
-  if (!releaseId || !/^R[0-9]{17}_[a-z0-9]+$/i.test(releaseId)) {
-    return bad('Invalid release_id', 400);
+  if (!table) return bad('Missing table');
+
+  if (table !== 'tests' && !TABLES.has(table)) {
+    return bad('Unsupported table: ' + table);
   }
 
-  if (html.length < 10000 || !html.includes('ExamMaster Pro')) {
-    return bad('Invalid release HTML', 400);
-  }
+  let written = 0;
+  let bundleTestsWritten = 0;
 
-  const row = {
-    id: releaseId,
-    release_id: releaseId,
-    release_path: String(
-      body.release_path || ('releases/' + releaseId + '.html')
-    ),
-    release_url: String(body.release_url || ''),
-    published_at: String(body.published_at || nowIso()),
-    content_hash: body.content_hash || await sha256Hex(html),
-    size_bytes: Number(body.size_bytes) ||
-      new TextEncoder().encode(html).length,
-    active: false,
-    html_content: html
-  };
+  if (table === 'bundles') {
+    for (const bundle of rows) {
+      await upsertSourceRow(env, 'bundles', bundle, null);
+      written++;
 
-  // Save and verify the complete HTML before deactivating the current release.
-  await upsertSourceRow(env, 'app_releases', row, 'release_id');
+      const subjects = Array.isArray(bundle?.subjects)
+        ? bundle.subjects
+        : [];
 
-  const saved = await env.DB.prepare(
-    'SELECT * FROM "app_releases" WHERE "release_id" = ? LIMIT 1'
-  ).bind(releaseId).first();
+      for (const subject of subjects) {
+        const tests = Array.isArray(subject?.tests)
+          ? subject.tests
+          : [];
 
-  if (!saved) {
-    return bad('Release save verification failed', 500);
-  }
+        const testRows = tests.map(test => ({
+          ...test,
+          id: test?.id,
+          subject_id: test?.subject_id ?? subject?.id ?? null,
+          bundle_id: test?.bundle_id ?? bundle?.id ?? null,
+          bundle_subject_id:
+            test?.bundle_subject_id ?? subject?.id ?? null,
+          bundle_subject_name:
+            test?.bundle_subject_name ?? subject?.name ?? null,
+          updated_at: test?.updated_at ?? bundle?.updated_at ?? nowIso(),
+          deleted_at: test?.deleted_at ?? null
+        })).filter(test =>
+          test.id != null &&
+          test.bundle_id != null &&
+          test.bundle_subject_id != null &&
+          test.name != null
+        );
 
-  const stored = d1RowToSource(saved);
-
-  if (
-    String(stored.html_content || '').length < 10000 ||
-    !String(stored.html_content || '').includes('ExamMaster Pro')
-  ) {
-    return bad('Release saved but HTML verification failed', 500);
-  }
-
-  // Activate the verified release, then deactivate any previous release.
-  await env.DB.prepare(
-    'UPDATE "app_releases" SET "active" = CASE WHEN "release_id" = ? THEN 1 ELSE 0 END'
-  ).bind(releaseId).run();
-
-  const active = await env.DB.prepare(
-    'SELECT release_id, release_url, published_at, size_bytes, active FROM "app_releases" WHERE "release_id" = ? LIMIT 1'
-  ).bind(releaseId).first();
-
-  if (!active || Number(active.active) !== 1) {
-    return bad('Release stored but activation verification failed', 500);
-  }
-
-  // Keep the latest two releases so already-open clients can finish fetching
-  // a previous version. Use typed columns, not JSON-only ordering.
-  const older = await env.DB.prepare(
-    'SELECT release_id FROM "app_releases" ORDER BY "published_at" DESC LIMIT -1 OFFSET 2'
-  ).all();
-
-  for (const old of (older.results || [])) {
-    if (String(old.release_id) !== releaseId) {
-      await env.DB.prepare(
-        'DELETE FROM "app_releases" WHERE "release_id" = ?'
-      ).bind(String(old.release_id)).run();
+        bundleTestsWritten += await importRowsToD1(
+          env,
+          'bundle_tests',
+          testRows
+        );
+      }
     }
+  } else if (table === 'tests') {
+    const testRows = rows.map(test => ({
+      ...test,
+      bundle_id: test?.bundle_id ?? null,
+      bundle_subject_id: test?.bundle_subject_id ?? null
+    })).filter(test =>
+      test.id != null &&
+      test.bundle_id != null &&
+      test.bundle_subject_id != null &&
+      test.name != null
+    );
+
+    bundleTestsWritten = await importRowsToD1(
+      env,
+      'bundle_tests',
+      testRows
+    );
+  } else {
+    written = await importRowsToD1(env, table, rows);
   }
 
   return json({
     success: true,
-    release_id: releaseId,
-    size_bytes: Number(active.size_bytes) || row.size_bytes,
-    release_url: active.release_url || '',
-    published_at: active.published_at,
-    active: true
+    table,
+    received: rows.length,
+    written,
+    bundle_tests_written: bundleTestsWritten
   });
 }
 
-async function handleGetAppRelease(request, env, url) {
-  const releaseId = String(
-    url.searchParams.get('release_id') || ''
-  ).trim();
-
-  if (!releaseId) {
-    return bad('release_id is required', 400);
+async function handleMigration(request, env, url) {
+  if (!adminAllowed(request, env)) {
+    return bad('Unauthorized', 401);
   }
 
-  const row = await env.DB.prepare(
-    'SELECT * FROM "app_releases" WHERE "release_id" = ? LIMIT 1'
-  ).bind(releaseId).first();
+  const tables = (
+    url.searchParams.get('tables') ||
+    'subjects,notes,bundles,bundle_tests,banners,content_notifications'
+  ).split(',').map(x => x.trim()).filter(Boolean);
 
-  if (!row) {
-    return bad('Release not found', 404);
+  const results = [];
+
+  for (const table of tables) {
+    results.push(await migrateStoreFromSupabase(env, table));
   }
 
-  const release = d1RowToSource(row);
-  const html = String(release.html_content || '');
-
-  if (html.length < 10000 || !html.includes('ExamMaster Pro')) {
-    return bad('Release HTML is missing or invalid', 404);
-  }
-
-  return new Response(html, {
-    status: 200,
-    headers: corsHeaders({
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store, max-age=0',
-      'X-EMP-Release-ID': releaseId,
-      'X-Content-Type-Options': 'nosniff'
-    })
+  return json({
+    success: true,
+    results
   });
 }
 
-async function route(request, env) {
-  const url = new URL(request.url);
+async function handleRpc(request, env, fn) {
+  if (fn !== 'get_bundle_entitlements') {
+    return bad('RPC not found', 404);
+  }
 
-  if (request.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: corsHeaders()
+  let body = {};
+
+  try {
+    body = await request.json();
+  } catch (_) {
+    return bad('Invalid JSON body');
+  }
+
+  const userKey = String(body.p_user_key || '').trim();
+
+  if (!userKey) return json([]);
+
+  const rows = await env.DB.prepare(
+    `SELECT bundle_id, created_at, data_json
+     FROM entitlements
+     WHERE user_key = ?
+     ORDER BY created_at DESC`
+  ).bind(userKey).all();
+
+  return json((rows.results || []).map(row => {
+    const data = safeJsonParse(row.data_json);
+
+    return Object.assign({
+      bundle_id: row.bundle_id,
+      created_at: row.created_at
+    }, data);
+  }));
+}
+
+/* =========================================================
+   RELEASE STORAGE
+   ========================================================= */
+
+async function handleReleaseStorage(request, env, path) {
+  const parts = path.split('/').filter(Boolean);
+  const isPublic = parts[2] === 'public';
+  const objectIndex = isPublic ? 4 : 3;
+  const bucket = parts[objectIndex];
+  const objectPath = parts.slice(objectIndex + 1).join('/');
+
+  if (bucket !== 'exam-master-releases') {
+    return bad('Storage bucket not found', 404);
+  }
+
+  if (request.method === 'GET' && isPublic) {
+    const row = await env.DB.prepare(
+      `SELECT data_json FROM app_releases
+       WHERE release_path = ? OR release_id = ?
+       LIMIT 1`
+    ).bind(objectPath, objectPath).first();
+
+    if (!row) return bad('Release not found', 404);
+
+    const data = safeJsonParse(row.data_json);
+    const html = String(data.html_content || data.html || '');
+
+    if (!html) return bad('Release content missing', 404);
+
+    return text(html, 200, 'text/html; charset=utf-8');
+  }
+
+  if (['PUT', 'POST'].includes(request.method)) {
+    if (!adminAllowed(request, env)) {
+      return bad('Unauthorized', 401);
+    }
+
+    const html = await request.text();
+
+    const releaseId =
+      objectPath.split('/').pop()?.replace(/\.html$/i, '') ||
+      crypto.randomUUID();
+
+    const row = {
+      release_id: releaseId,
+      release_path: objectPath,
+      release_url: new URL(
+        '/storage/v1/object/public/' +
+        bucket + '/' + objectPath,
+        request.url
+      ).toString(),
+      published_at: nowIso(),
+      size_bytes: html.length,
+      active: 0,
+      html_content: html
+    };
+
+    const existing = await env.DB.prepare(
+      'SELECT data_json FROM app_releases WHERE release_id = ?'
+    ).bind(releaseId).first();
+
+    let previous = {};
+
+    if (existing) {
+      previous = safeJsonParse(existing.data_json);
+    }
+
+    const merged = { ...previous, ...row };
+    const d = sourceRowToD1('app_releases', merged);
+
+    if (existing) {
+      await env.DB.prepare(
+        `UPDATE app_releases
+         SET release_path = ?,
+             release_url = ?,
+             published_at = ?,
+             size_bytes = ?,
+             data_json = ?
+         WHERE release_id = ?`
+      ).bind(
+        d.release_path,
+        d.release_url,
+        d.published_at,
+        d.size_bytes,
+        JSON.stringify(merged),
+        releaseId
+      ).run();
+    } else {
+      await env.DB.prepare(
+        `INSERT INTO app_releases
+         (release_id, release_path, release_url, published_at,
+          size_bytes, content_hash, active, data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        releaseId,
+        d.release_path,
+        d.release_url,
+        d.published_at,
+        d.size_bytes,
+        null,
+        0,
+        JSON.stringify(merged)
+      ).run();
+    }
+
+    return json({
+      Key: objectPath,
+      release_id: releaseId
     });
   }
 
+  return bad('Method not allowed', 405);
+}
+
+async function handleHealth(env) {
   try {
-    if (
-      url.pathname === '/api/releases/publish' &&
-      request.method === 'POST'
-    ) {
-      return await handlePublishAppRelease(request, env);
-    }
+    const result = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ).all();
 
-    if (
-      url.pathname === '/api/releases/content' &&
-      request.method === 'GET'
-    ) {
-      return await handleGetAppRelease(request, env, url);
-    }
-
-    if (url.pathname === '/api/import/json') {
-      return await handleImportJson(request, env);
-    }
-
-    if (url.pathname === '/api/analytics/event') {
-      return await handleAnalyticsEvent(request, env);
-    }
-
-    if (url.pathname === '/api/rank/submit') {
-      return await handleRankSubmit(request, env);
-    }
-
-    if (url.pathname === '/api/rank/leaderboard') {
-      return await handleRankLeaderboard(request, env, url);
-    }
-
-    if (url.pathname === '/rest/v1/rpc/redeem_activation_code') {
-      return await handleRedeemActivation(request, env);
-    }
-
-    if (url.pathname === '/rest/v1/rpc/get_bundle_entitlements') {
-      return await handleGetBundleEntitlements(request, env);
-    }
-
-    if (url.pathname.startsWith('/rest/v1/')) {
-      const table = decodeURIComponent(
-        url.pathname.slice('/rest/v1/'.length).replace(/\/$/, '')
-      );
-
-      if (table.includes('/')) {
-        return bad('Unsupported REST path', 404);
-      }
-
-      return await handleRest(request, env, table, url);
-    }
-
-    if (url.pathname === '/' || url.pathname === '/health') {
-      return json({
-        ok: true,
-        service: 'ExamMaster Pro Cloudflare Worker',
-        version: 'ACCESS-PUBLISH-LIVE-RELEASE-FIX-3',
-        time: nowIso()
-      });
-    }
-
-    return bad('Not found', 404);
-  } catch (e) {
-    console.error('Worker error:', e);
-
-    return bad(
-      String(e?.message || e || 'Internal Worker error'),
-      500
-    );
+    return json({
+      success: true,
+      database: 'connected',
+      tables: result.results || [],
+      api: 'phase2-rest-compat'
+    });
+  } catch (error) {
+    return json({
+      success: false,
+      error: error.message
+    }, 500);
   }
 }
 
+/* =========================================================
+   MAIN WORKER
+   ========================================================= */
+
 export default {
   async fetch(request, env) {
-    return route(request, env);
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders()
+      });
+    }
+
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/\/+$/, '') || '/';
+
+    try {
+      if (path === '/' || path === '/health') {
+        return handleHealth(env);
+      }
+
+      if (path.startsWith('/rest/v1/rpc/')) {
+        const fn = path.split('/').pop();
+
+        if (fn === 'redeem_activation_code') {
+          return handleRedeemActivation(request, env);
+        }
+
+        return handleRpc(request, env, fn);
+      }
+
+      if (path === '/api/migrate/supabase') {
+        return handleMigration(request, env, url);
+      }
+
+      if (path === '/api/import/json') {
+        return handleJsonImport(request, env);
+      }
+
+      if (path.startsWith('/rest/v1/')) {
+        const table = path.slice('/rest/v1/'.length).split('/')[0];
+
+        return handleRest(request, env, table, url);
+      }
+
+      if (path.startsWith('/storage/v1/object/')) {
+        return handleReleaseStorage(request, env, path);
+      }
+
+      if (path === '/api/status') {
+        return json({
+          ok: true,
+          worker: 'exammaster-pro-api',
+          database: 'D1',
+          r2: false
+        });
+      }
+
+      return bad('Not found', 404);
+    } catch (error) {
+      console.error('Worker error:', error);
+
+      return json({
+        error: error.message || String(error)
+      }, 500);
+    }
   }
 };
