@@ -445,9 +445,31 @@ async function readTable(env, table, url) {
     throw new Error('Unsupported table: ' + table);
   }
 
-  const rows = await env.DB.prepare(
-    `SELECT ${cols.map(c => '"' + c + '"').join(',')} FROM "${table}"`
-  ).all();
+  // Reduce memory use for bundle_tests lookups by filtering in D1 first.
+  // Check both indexed columns and data_json because data_json can override
+  // column values in d1RowToSource(). The original JS filter remains below.
+  let sql = `SELECT ${cols.map(c => '"' + c + '"').join(',')} FROM "${table}"`;
+  const bindValues = [];
+
+  if (table === 'bundle_tests') {
+    const conditions = [];
+
+    for (const f of parseFilters(url)) {
+      if (f.op !== 'eq' || !['name', 'bundle_id'].includes(f.key)) continue;
+
+      const key = f.key;
+      const value = String(f.val ?? '');
+      conditions.push(
+        `(CAST(COALESCE("${key}", '') AS TEXT) = ? OR ` +
+        `CAST(COALESCE(json_extract("data_json", '$.${key}'), '') AS TEXT) = ?)`
+      );
+      bindValues.push(value, value);
+    }
+
+    if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
+  }
+
+  const rows = await env.DB.prepare(sql).bind(...bindValues).all();
 
   let out = (rows.results || []).map(d1RowToSource);
   out = out.filter(r => rowMatches(r, parseFilters(url)));
@@ -693,13 +715,8 @@ function activationCodeMatches(row, inputCode, hashes) {
   for (const candidate of candidates) {
     const candidateNormalized = normalizeActivationCode(candidate);
 
-    // Supports an exact stored code.
     if (candidate === inputCode.trim()) return true;
-
-    // Supports case and whitespace normalization.
     if (candidateNormalized === inputNormalized) return true;
-
-    // Supports SHA-256 hashes stored in the code column or JSON data.
     if (hashes.has(candidate.toLowerCase())) return true;
   }
 
@@ -726,10 +743,6 @@ async function handleRedeemActivation(request, env) {
     }, 400);
   }
 
-  /*
-   * Try the commonly used code representations.
-   * This does not bypass bundle matching or one-time redemption.
-   */
   const normalizedCode = normalizeActivationCode(suppliedCode);
 
   const hashes = new Set([
@@ -740,10 +753,6 @@ async function handleRedeemActivation(request, env) {
   let matchingRow = null;
   let matchingBundleRow = null;
 
-  /*
-   * Read activation codes and compare both the code column and
-   * JSON fields. This handles raw codes and SHA-256 hashes.
-   */
   const result = await env.DB.prepare(
     `SELECT id, code, bundle_id, amount, status,
             redeemed_by, redeemed_at, created_at, data_json
@@ -796,10 +805,6 @@ async function handleRedeemActivation(request, env) {
   const now = nowIso();
   const data = safeJsonParse(row.data_json);
 
-  /*
-   * Use a conditional update so a previously redeemed code
-   * cannot be redeemed again.
-   */
   const update = await env.DB.prepare(
     `UPDATE activation_codes
      SET status = ?,
