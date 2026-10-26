@@ -446,8 +446,7 @@ async function readTable(env, table, url) {
   }
 
   // Reduce memory use for bundle_tests lookups by filtering in D1 first.
-  // Check both indexed columns and data_json because data_json can override
-  // column values in d1RowToSource(). The original JS filter remains below.
+  // Check indexed columns and data_json because JSON can override column values.
   let sql = `SELECT ${cols.map(c => '"' + c + '"').join(',')} FROM "${table}"`;
   const bindValues = [];
 
@@ -1138,6 +1137,54 @@ async function handleRpc(request, env, fn) {
 }
 
 /* =========================================================
+   ANALYTICS EVENT ENDPOINT
+   ========================================================= */
+
+async function handleAnalyticsEvent(request, env) {
+  if (request.method !== 'POST') {
+    return bad('Method not allowed', 405);
+  }
+
+  let body;
+
+  try {
+    body = await request.json();
+  } catch (_) {
+    return bad('Invalid JSON body');
+  }
+
+  const userId = String(body.user_id ?? body.userId ?? '').trim();
+  const username = String(body.username ?? body.name ?? 'User').trim();
+  const eventType = String(body.event_type ?? body.type ?? 'event').trim();
+
+  if (!userId) {
+    return bad('Missing user_id');
+  }
+
+  const occurredAt = String(body.occurred_at ?? nowIso());
+  const id = String(body.id ?? crypto.randomUUID());
+
+  // Preserve all incoming fields—including duration/time-spent fields—in data_json.
+  const record = {
+    ...body,
+    id,
+    user_id: userId,
+    username,
+    event_type: eventType,
+    occurred_at: occurredAt
+  };
+
+  await upsertSourceRow(env, 'emp_analytics_events', record, null);
+
+  return json({
+    success: true,
+    id,
+    event_type: eventType,
+    user_id: userId
+  });
+}
+
+/* =========================================================
    RELEASE STORAGE
    ========================================================= */
 
@@ -1290,6 +1337,10 @@ export default {
     try {
       if (path === '/' || path === '/health') {
         return handleHealth(env);
+      }
+
+      if (path === '/api/analytics/event') {
+        return handleAnalyticsEvent(request, env);
       }
 
       if (path.startsWith('/rest/v1/rpc/')) {
