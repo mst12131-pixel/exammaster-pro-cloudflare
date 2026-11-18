@@ -45,6 +45,127 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+
+/* =========================================================
+   EXAMMASTER ACCOUNT AUTH — EMAIL OTP + GOOGLE
+   Required Worker secrets: RESEND_API_KEY, AUTH_TOKEN_SECRET,
+   GOOGLE_CLIENT_ID. Required D1 tables are in auth_schema.sql.
+   ========================================================= */
+const AUTH_SESSION_TTL = 60 * 60 * 24 * 30;
+const AUTH_OTP_TTL = 10 * 60;
+
+async function authHash(value) {
+  const bytes = new TextEncoder().encode(String(value));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+function authRandomToken(bytes = 32) {
+  const a = new Uint8Array(bytes); crypto.getRandomValues(a);
+  return [...a].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+function authEmail(value) { return String(value || '').trim().toLowerCase(); }
+function authBearer(request) {
+  const m = String(request.headers.get('Authorization') || '').match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : '';
+}
+async function authSession(request, env) {
+  const token = authBearer(request); if (!token) return null;
+  const hash = await authHash(token);
+  const row = await env.DB.prepare(
+    `SELECT s.user_id,s.expires_at,u.email,u.display_name
+     FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id
+     WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? LIMIT 1`
+  ).bind(hash, Math.floor(Date.now()/1000)).first();
+  return row || null;
+}
+async function authCreateSession(env, user) {
+  const token = authRandomToken(32), now = Math.floor(Date.now()/1000);
+  await env.DB.prepare(`INSERT INTO auth_sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)`)
+    .bind(await authHash(token), user.id, now + AUTH_SESSION_TTL, now).run();
+  return { token, user: { id:user.id, username:user.display_name || user.email, email:user.email, role:'user' }, expires_at:now + AUTH_SESSION_TTL };
+}
+async function authFindOrCreateUser(env, email, displayName, provider, subject) {
+  const existingIdentity = await env.DB.prepare(
+    `SELECT u.id,u.email,u.display_name FROM auth_identities i JOIN auth_users u ON u.id=i.user_id WHERE i.provider=? AND i.provider_subject=? LIMIT 1`
+  ).bind(provider,subject).first();
+  if (existingIdentity) return existingIdentity;
+  let user = await env.DB.prepare(`SELECT id,email,display_name FROM auth_users WHERE email=? LIMIT 1`).bind(email).first();
+  if (!user) {
+    const id = crypto.randomUUID(), now = Math.floor(Date.now()/1000);
+    await env.DB.prepare(`INSERT OR IGNORE INTO auth_users(id,email,display_name,created_at,updated_at) VALUES(?,?,?,?,?)`)
+      .bind(id,email,String(displayName||email).slice(0,120),now,now).run();
+    user = await env.DB.prepare(`SELECT id,email,display_name FROM auth_users WHERE email=? LIMIT 1`).bind(email).first();
+  }
+  if (!user) throw new Error('Could not create account. Please retry.');
+  await env.DB.prepare(`INSERT OR IGNORE INTO auth_identities(provider,provider_subject,user_id,created_at) VALUES(?,?,?,?)`)
+    .bind(provider,subject,user.id,Math.floor(Date.now()/1000)).run();
+  return user;
+}
+async function handleEmailOtpRequest(request, env) {
+  if (request.method !== 'POST') return bad('Method not allowed',405);
+  if (!env.RESEND_API_KEY) return bad('Email OTP is not configured. Add RESEND_API_KEY.',503);
+  let body={}; try{body=await request.json();}catch(_){return bad('Invalid JSON body');}
+  const email=authEmail(body.email);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length>254) return bad('Enter a valid email address.');
+  const now=Math.floor(Date.now()/1000);
+  const recent=await env.DB.prepare(`SELECT COUNT(*) AS n FROM auth_otp_challenges WHERE email=? AND created_at>?`).bind(email,now-3600).first();
+  if (Number(recent?.n||0)>=5) return bad('Too many codes requested. Try again in an hour.',429);
+  const ip=request.headers.get('CF-Connecting-IP')||'unknown';
+  const ipCount=await env.DB.prepare(`SELECT COUNT(*) AS n FROM auth_otp_challenges WHERE ip_hash=? AND created_at>?`).bind(await authHash(ip),now-3600).first();
+  if (Number(ipCount?.n||0)>=20) return bad('Too many requests from this network. Try later.',429);
+  const code=String(crypto.getRandomValues(new Uint32Array(1))[0]%1000000).padStart(6,'0');
+  const challenge=crypto.randomUUID();
+  const secret=String(env.AUTH_TOKEN_SECRET||'');
+  if(secret.length<32) return bad('AUTH_TOKEN_SECRET must be configured (32+ characters).',503);
+  const codeHash=await authHash(`${email}:${code}:${secret}`);
+  await env.DB.prepare(`INSERT INTO auth_otp_challenges(id,email,code_hash,expires_at,attempts,created_at,ip_hash) VALUES(?,?,?,?,0,?,?)`)
+    .bind(challenge,email,codeHash,now+AUTH_OTP_TTL,now,await authHash(ip)).run();
+  const send=await fetch('https://api.resend.com/emails',{method:'POST',headers:{'Authorization':`Bearer ${env.RESEND_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({
+    from:env.AUTH_EMAIL_FROM||'ExamMaster Pro <onboarding@resend.dev>',to:[email],subject:'Your ExamMaster Pro login code',
+    html:`<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:24px"><h2>ExamMaster Pro</h2><p>Your one-time login code is:</p><div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:18px;background:#f2f4f8;border-radius:12px;text-align:center">${code}</div><p>This code expires in 10 minutes. Do not share it with anyone.</p><p>If you did not request this code, you can ignore this email.</p></div>`
+  })});
+  if(!send.ok){const detail=await send.text(); await env.DB.prepare(`DELETE FROM auth_otp_challenges WHERE id=?`).bind(challenge).run(); console.error('Resend error',detail); return bad('Could not send email OTP. Check Resend sender/domain configuration.',502);}
+  return json({success:true,message:'A 6-digit code has been sent to your email.',challenge_id:challenge,expires_in:AUTH_OTP_TTL});
+}
+async function handleEmailOtpVerify(request, env) {
+  if(request.method!=='POST') return bad('Method not allowed',405);
+  let body={};try{body=await request.json();}catch(_){return bad('Invalid JSON body');}
+  const email=authEmail(body.email), code=String(body.code||'').trim(), challenge=String(body.challenge_id||'');
+  if(!email||!/^[0-9]{6}$/.test(code)||!challenge) return bad('Enter the 6-digit code sent to your email.');
+  const row=await env.DB.prepare(`SELECT * FROM auth_otp_challenges WHERE id=? AND email=? AND consumed_at IS NULL LIMIT 1`).bind(challenge,email).first();
+  const now=Math.floor(Date.now()/1000);
+  if(!row||Number(row.expires_at)<=now) return bad('Code expired. Request a new code.',400);
+  if(Number(row.attempts)>=5) return bad('Too many incorrect attempts. Request a new code.',429);
+  await env.DB.prepare(`UPDATE auth_otp_challenges SET attempts=attempts+1 WHERE id=?`).bind(challenge).run();
+  const expected=await authHash(`${email}:${code}:${String(env.AUTH_TOKEN_SECRET||'')}`);
+  if(expected!==row.code_hash) return bad('Incorrect code. Please try again.',400);
+  await env.DB.prepare(`UPDATE auth_otp_challenges SET consumed_at=? WHERE id=? AND consumed_at IS NULL`).bind(now,challenge).run();
+  const user=await authFindOrCreateUser(env,email,email,'email',email);
+  return json(await authCreateSession(env,user));
+}
+async function handleGoogleAuth(request, env) {
+  if(request.method!=='POST') return bad('Method not allowed',405);
+  let body={};try{body=await request.json();}catch(_){return bad('Invalid JSON body');}
+  const credential=String(body.credential||'');
+  if(!credential||!env.GOOGLE_CLIENT_ID) return bad('Google Sign-In is not configured.',503);
+  const verify=await fetch('https://oauth2.googleapis.com/tokeninfo?id_token='+encodeURIComponent(credential));
+  if(!verify.ok) return bad('Google credential could not be verified.',401);
+  const claims=await verify.json();
+  if(claims.aud!==env.GOOGLE_CLIENT_ID || !['accounts.google.com','https://accounts.google.com'].includes(claims.iss) || Number(claims.exp)<=Math.floor(Date.now()/1000) || claims.email_verified!=='true' || !claims.sub || !claims.email) return bad('Google account verification failed.',401);
+  const email=authEmail(claims.email);
+  const user=await authFindOrCreateUser(env,email,claims.name||email,'google',String(claims.sub));
+  return json(await authCreateSession(env,user));
+}
+async function handleAuthLogout(request, env) {
+  const token=authBearer(request); if(token) await env.DB.prepare(`UPDATE auth_sessions SET revoked_at=? WHERE token_hash=?`).bind(Math.floor(Date.now()/1000),await authHash(token)).run();
+  return json({success:true});
+}
+async function handleAuthMe(request, env) {
+  const session=await authSession(request,env);
+  if(!session) return bad('Session expired. Please sign in again.',401);
+  return json({user:{id:session.user_id,email:session.email,username:session.display_name||session.email,role:'user'},expires_at:session.expires_at});
+}
+
 function cleanIdent(value) {
   const s = String(value || '');
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) ? s : null;
@@ -672,7 +793,8 @@ async function handleRedeemActivation(request, env) {
 
   const suppliedCode = String(body.p_code ?? '').trim();
   const bundleId = String(body.p_bundle_id ?? '').trim();
-  const userKey = String(body.p_user_key ?? '').trim();
+  const session = await authSession(request, env);
+  const userKey = session ? `AUTH_USER:${session.user_id}` : '';
 
   if (!suppliedCode || !bundleId || !userKey) {
     return json({
@@ -955,8 +1077,9 @@ async function handleRpc(request, env, fn) {
     return bad('Invalid JSON body');
   }
 
-  const userKey = String(body.p_user_key || '').trim();
-  if (!userKey) return json([]);
+  const session = await authSession(request, env);
+  const userKey = session ? `AUTH_USER:${session.user_id}` : '';
+  if (!userKey) return json([], 401);
 
   const rows = await env.DB.prepare(
     `SELECT bundle_id,created_at,data_json
@@ -1469,6 +1592,12 @@ export default {
       if (path === '/' || path === '/health') {
         return handleHealth(env);
       }
+
+      if (path === '/api/auth/email/request') return handleEmailOtpRequest(request, env);
+      if (path === '/api/auth/email/verify') return handleEmailOtpVerify(request, env);
+      if (path === '/api/auth/google') return handleGoogleAuth(request, env);
+      if (path === '/api/auth/logout') return handleAuthLogout(request, env);
+      if (path === '/api/auth/me') return handleAuthMe(request, env);
 
       if (path === '/api/analytics/event') {
         return handleAnalyticsEvent(request, env);
